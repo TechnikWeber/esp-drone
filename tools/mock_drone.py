@@ -21,6 +21,8 @@ UI tool, the real logic is tested in components/webctrl/host_test.
                               second in flight. Under load it sags by up to
                               0.4 V. Try --vbat 3.45 --drain 0.02 to see the
                               forced landing after about 10 s of hovering.
+--imu-offset R,P              the sensor reads roll R and pitch P degrees while
+                              the drone stands level (try "Level on the ground")
 
 Copyright 2026 Philipp Weber
 SPDX-License-Identifier: GPL-3.0-only
@@ -211,6 +213,9 @@ class Drone:
                 s |= S_OTHER
             if self.stage >= 2:
                 s |= S_FAILSAFE
+        # On the ground a tilted sensor shows its offset; in flight the controller
+        # holds the reading at the setpoint, so the offset is not visible.
+        off_r, off_p = (0.0, 0.0) if self.token else args.imu_offset
         v = self.vbat()
         if 0.5 <= v < BAT_LOW_V:
             s |= S_LOWBAT
@@ -224,7 +229,8 @@ class Drone:
         seq, cms = c.echo
         mine = c is self.pilot
         return struct.pack("<BBBBHHIHhhhHHHBBIIbbH", MSG_TELEMETRY, s, self.stage if self.token else 4, c.arm_result,
-                           seq, c.rate, cms, int(v * 1000), int(self.roll * 100), int(self.pitch * 100),
+                           seq, c.rate, cms, int(v * 1000), int((self.roll + off_r) * 100),
+                           int((self.pitch + off_p) * 100),
                            int(self.yaw * 100), int(self.thrust * 1000), self.stale if mine else 0, 0,
                            s2, self.stop_reason, t, self.token if mine else 0, self.trim[0], self.trim[1], 0)
 
@@ -394,6 +400,8 @@ async def main():
     p.add_argument("--stall-ms", type=int, default=0)
     p.add_argument("--vbat", type=float, default=4.10)
     p.add_argument("--drain", type=float, default=0.004)
+    p.add_argument("--imu-offset", default="0,0", type=lambda v: tuple(float(x) for x in v.split(",")),
+                   help="roll,pitch in degrees")
     args = p.parse_args()
     drone.vbat_rest = args.vbat
     sys.stdout.reconfigure(line_buffering=True)

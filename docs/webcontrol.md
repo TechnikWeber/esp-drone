@@ -115,6 +115,11 @@ If the drone drifts sideways by itself while hovering, the trim corrects it: tap
   drone, and the portal window on iPhones forgets its storage. They are written
   only while nobody is armed, because writing the flash stalls the flight
   controller briefly.
+- **Level on the ground** (button in the trim panel): with the drone standing
+  still on a level surface, the page averages the attitude the drone reports
+  for 2 s and sets the trim from it, so the drone hovers level from the first
+  flight. It refuses if the drone moves or is tilted more than 5°, and works
+  only while disarmed.
 - On the ground every phone may trim, in flight only the pilot.
 - The trim applies to web control only, not to the app or cfclient.
 

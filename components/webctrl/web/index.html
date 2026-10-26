@@ -50,6 +50,9 @@ button:disabled{opacity:.45}
 #mid.trimming #horizon{display:none}
 #mid.trimming #trim{display:grid}
 #trimBtn.on{background:#1f3a5a;border-color:var(--accent)}
+#level{display:none;width:146px;padding:6px 8px;font-size:13px}
+#mid.trimming #level{display:block}
+#mid.trimming #stats{display:none}
 #rotate,#dlg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0b0f14f2;z-index:5;padding:20px;text-align:center}
 #dlg .box{max-width:560px;max-height:90vh;overflow:auto;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;user-select:text;-webkit-user-select:text;touch-action:pan-y}
 #dlg h2{margin:.2em 0 .5em;font-size:18px}#dlg p{margin:.5em 0;color:#c8d1db}#dlg small{color:var(--dim)}
@@ -79,6 +82,7 @@ button:disabled{opacity:.45}
         <button data-ax="r" data-d="-1" data-ta="trimLeft">◀</button><div id="trimVal"><span id="trimR"></span><span id="trimP"></span></div><button data-ax="r" data-d="1" data-ta="trimRight">▶</button>
         <span></span><button data-ax="p" data-d="-1" data-ta="trimDown">▼</button><span></span>
       </div>
+      <button id="level" data-t="level"></button>
       <div id="stats">–</div>
       <button id="kill" data-t="kill"></button>
     </div>
@@ -124,6 +128,9 @@ const TEXT = {
     kill: "STOP", killSent: "STOP sent – motors off",
     trimUp: "Trim forward", trimDown: "Trim backward", trimLeft: "Trim left", trimRight: "Trim right",
     trimLimit: "Trim at its limit (±5°)", trimReset: "Trim reset to 0", roll: "R", pitch: "P",
+    level: "Level on the ground", levelBusy: "Measuring… keep still", levelNotNow: "Level only on the ground, disarmed",
+    levelNoData: "No attitude data – try again", levelMoved: "The drone moved – put it down still and try again",
+    levelTooFar: "Tilted more than 5° – is the surface level?", levelDone: (r, p) => `Levelled: trim R ${r} · P ${p}`,
     stats: (s) => `R ${s.roll}° P ${s.pitch}° · thrust ${s.thrust} %\ndelay ${s.delay} ms · dropped ${s.stale} · ${s.rate}/s`,
     stages: ["", "Short gap – holding the last command", "Link lost – drone is levelling out",
       "Link lost – drone is descending", "Motors off"],
@@ -151,7 +158,8 @@ const TEXT = {
     helpLink: "<b>Link loss:</b> The drone bridges short gaps; after that it levels out, descends and turns the motors off",
     helpTrim: "<b>Trim:</b> If the drone drifts sideways by itself while hovering, tap “Trim” and correct with the " +
       "arrows (0.5° per tap, up to ±5°): if it drifts to the right, tap ◀. A long press on the middle resets to 0. " +
-      "The drone stores the values; in flight only the pilot may trim.",
+      "The drone stores the values; in flight only the pilot may trim. Before the first flight, put the drone on a " +
+      "level surface and tap “Level on the ground”: it measures the tilt of the sensor and sets the trim from it.",
     helpBattery: "<b>Battery:</b>",
     helpSafety: "<b>Safety:</b> Propellers can injure. Only fly in a safe place and keep away from people.",
     license: "ESP-Drone web control · Copyright © 2026 Philipp Weber. Based on ESP-Drone (© Espressif Systems) " +
@@ -170,6 +178,9 @@ const TEXT = {
     kill: "NOT-AUS", killSent: "NOT-AUS gesendet",
     trimUp: "Trimm vorwärts", trimDown: "Trimm rückwärts", trimLeft: "Trimm links", trimRight: "Trimm rechts",
     trimLimit: "Trimmung am Anschlag (±5°)", trimReset: "Trimmung auf 0 gesetzt", roll: "R", pitch: "N",
+    level: "Am Boden nivellieren", levelBusy: "Misst… nicht bewegen", levelNotNow: "Nivellieren nur am Boden und entschärft",
+    levelNoData: "Keine Lagedaten – bitte noch einmal", levelMoved: "Drohne hat sich bewegt – still hinstellen und nochmal",
+    levelTooFar: "Mehr als 5° schief – ist die Fläche eben?", levelDone: (r, p) => `Nivelliert: Trimmung R ${r} · N ${p}`,
     stats: (s) => `R ${s.roll}° N ${s.pitch}° · Schub ${s.thrust} %\nVerzög. ${s.delay} ms · verworfen ${s.stale} · ${s.rate}/s`,
     stages: ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich gerade aus",
       "Verbindung weg – Drohne sinkt ab", "Motoren aus"],
@@ -200,7 +211,9 @@ const TEXT = {
       "sinkt ab und schaltet die Motoren ab",
     helpTrim: "<b>Trimmen:</b> Driftet die Drohne beim Schweben von allein zur Seite, „Trimm“ antippen und mit den " +
       "Pfeilen gegensteuern (je 0,5°, höchstens ±5°): Driftet sie nach rechts, ◀ tippen. Lange auf die Mitte " +
-      "drücken setzt auf 0. Die Drohne speichert die Werte selbst; im Flug darf nur der Pilot trimmen.",
+      "drücken setzt auf 0. Die Drohne speichert die Werte selbst; im Flug darf nur der Pilot trimmen. Vor dem ersten " +
+      "Flug die Drohne auf eine ebene Fläche stellen und „Am Boden nivellieren“ tippen: Sie misst die Schieflage des " +
+      "Sensors und stellt die Trimmung danach ein.",
     helpBattery: "<b>Akku:</b>",
     helpSafety: "<b>Sicherheit:</b> Propeller können verletzen. Nur in sicherer Umgebung fliegen, Abstand zu Personen halten.",
     license: "ESP-Drone Web Control · Copyright © 2026 Philipp Weber. Basiert auf ESP-Drone (© Espressif Systems) " +
@@ -331,6 +344,7 @@ function onTelemetry(v) {
   const now = performance.now();
   const wasFlying = !!(tel && (tel.state & S_ARMED) && (tel.state & S_YOU));
   lastTel = now; tel = tm;
+  if (levelSamples && now < levelUntil && !(tm.state & S_ARMED)) levelSamples.push({ r: tm.roll, p: tm.pitch });
   const r = (ms32() - tm.echoMs) >>> 0;
   if (tm.echoMs && r < 10000) rtt = rtt < 0 ? r : rtt * 0.8 + r * 0.2;
 
@@ -434,6 +448,33 @@ trimVal.addEventListener("pointerdown", () => {
   trimResetTimer = setTimeout(() => { if (sendTrim(0, 0)) { buzz(40); toast(t("trimReset"), "info"); } }, 800);
 });
 ["pointerup", "pointercancel", "pointerleave"].forEach(ev => trimVal.addEventListener(ev, () => clearTimeout(trimResetTimer)));
+// ---- level on the ground: the tilt the sensor reads becomes the trim --------
+const LEVEL_MS = 2000, LEVEL_MAX_SPREAD = 0.5, LEVEL_MAX_DEG = 5;
+let levelSamples = null, levelUntil = 0;
+$("level").addEventListener("click", () => {
+  if (levelSamples) return;
+  if (!trimAllowed() || (tel.state & S_ARMED)) { toast(t("levelNotNow"), "warn"); return; }
+  if (!(tel.state & S_READY)) { toast(t("msgCalibrating"), "warn"); return; }
+  levelSamples = []; levelUntil = performance.now() + LEVEL_MS;
+  renderTrim();
+  setTimeout(finishLevel, LEVEL_MS + 100);
+});
+function finishLevel() {
+  const samples = levelSamples || [];
+  levelSamples = null;
+  renderTrim();
+  if (samples.length < 20) { toast(t("levelNoData"), "warn"); return; }
+  const span = k => Math.max(...samples.map(x => x[k])) - Math.min(...samples.map(x => x[k]));
+  if (span("r") > LEVEL_MAX_SPREAD || span("p") > LEVEL_MAX_SPREAD) { toast(t("levelMoved"), "warn"); return; }
+  const mean = k => samples.reduce((a, x) => a + x[k], 0) / samples.length;
+  const roll = mean("r"), pitch = mean("p");
+  if (Math.abs(roll) > LEVEL_MAX_DEG || Math.abs(pitch) > LEVEL_MAX_DEG) { toast(t("levelTooFar"), "bad"); return; }
+  // To hover level, the drone has to hold the attitude its sensor reads when it
+  // stands level. Roll trim (+ = right) is the roll reading; pitch trim
+  // (+ = forward, nose down) is minus the pitch reading (+ = nose up).
+  const r = Math.round(roll * 10), p = Math.round(-pitch * 10);
+  if (sendTrim(r, p)) { buzz(40); toast(t("levelDone")(fmtTrim(r), fmtTrim(p)), "ok"); }
+}
 $("trimBtn").onclick = () => {
   const on = $("mid").classList.toggle("trimming");
   $("trimBtn").classList.toggle("on", on);
@@ -447,6 +488,9 @@ function renderTrim() {
   trimVal.classList.toggle("set", set);
   document.querySelectorAll("#trim button").forEach(b => { b.disabled = !ok; });
   $("trimBtn").textContent = t("trim") + (set ? " •" : "");
+  const lv = $("level");
+  lv.textContent = levelSamples ? t("levelBusy") : t("level");
+  lv.disabled = !!levelSamples || !ok || !!(tel && (tel.state & S_ARMED));
 }
 
 $("info").onclick = () => { $("dlg").style.display = "flex"; };

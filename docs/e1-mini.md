@@ -14,6 +14,9 @@ hardware, how to flash it and how to test on the bench before the first flight.
 > **Status:** ported from the vendor's documents, **not tested on real hardware
 > yet**. The bench checklist below is therefore mandatory.
 
+The short path from the box to the first hover:
+[getting-started.md](getting-started.md).
+
 ## Hardware
 
 | Function | Connection | Source |
@@ -231,6 +234,7 @@ Every item has to pass before the propellers go on.
 - Small, open room, nobody nearby, prop guards on.
 - Propellers as from the factory (mind the direction), battery full.
 - Put the drone down level and keep it still until the calibration is done.
+  Before the first flight, tap Trim → "Level on the ground" once.
 - Arm and raise the throttle slowly. If it tips over or spins away on takeoff:
   **STOP** at once.
 - Controller gains: for roll and pitch the E1 Mini uses the vendor firmware's

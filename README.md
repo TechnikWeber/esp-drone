@@ -9,7 +9,8 @@ page opens by itself (captive portal). No app, no account, no internet.
 **Install:** one click in the [web flasher](https://technikweber.github.io/esp-drone/)
 (Chrome or Edge on a computer), or download an image from the
 [releases](https://github.com/TechnikWeber/esp-drone/releases). All ways, including
-Espressif's own tools: [docs/flashing.md](docs/flashing.md).
+Espressif's own tools: [docs/flashing.md](docs/flashing.md). **First steps,** from the
+box to the first hover: [docs/getting-started.md](docs/getting-started.md).
 
 <table>
   <tr>
@@ -25,7 +26,7 @@ Espressif's own tools: [docs/flashing.md](docs/flashing.md).
     <td><img src="docs/images/webcontrol-battery.png" alt="Forced landing with an empty battery"></td>
   </tr>
   <tr>
-    <td><b>Trim.</b> Correct a sideways drift in 0.5° steps; the drone stores it.</td>
+    <td><b>Trim.</b> Level the drone on the ground with one tap, correct a drift in 0.5° steps; the drone stores it.</td>
     <td><b>Empty battery.</b> The drone lands by itself while you keep steering.</td>
   </tr>
 </table>

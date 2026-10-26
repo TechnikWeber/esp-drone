@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - webcontrol
   pull_request:
 
 jobs:

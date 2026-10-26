@@ -3,9 +3,10 @@
 Diese Firmware-Variante läuft auf dem Bausatz **CHERGLOW (琛光) E1 Mini**
 (Open-Hardware-Projekt: <https://oshwhub.com/songge8/project_qqqyfdkm>), der unter
 anderem als „ESP32 Drone Kit“ verkauft wird. Ab Werk läuft darauf die
-Arduino-Firmware *CF-Drone*. Diese Anleitung beschreibt, wie ESP-Drone an die
-Hardware angepasst wurde, wie man flasht und wie man vor dem ersten Flug am
-Prüfstand testet.
+Arduino-Firmware *CF-Drone* ([songge8/CF-Drone](https://github.com/songge8/CF-Drone)),
+bei manchen Händlern umbenannt in „XW-Drone“. Diese Anleitung beschreibt, wie
+ESP-Drone an die Hardware angepasst wurde, wie man flasht und wie man vor dem
+ersten Flug am Prüfstand testet.
 
 > **Stand:** portiert anhand der Herstellerunterlagen, noch **nicht auf echter
 > Hardware getestet**. Die Prüfstand-Checkliste unten ist deshalb Pflicht.
@@ -32,8 +33,9 @@ wurde nichts übernommen.
 ### Einbaulage des Lagesensors
 
 ESP-Drone rechnet im Körpersystem der Crazyflie: X nach vorn, Y nach links,
-Z nach oben. Die Werks-Firmware gibt für den Sensor `imuRotation = (0, 0, −90°)`
-an. Ihr `rotateVector()` dreht aber passiv (q⁻¹·v·q); nachgerechnet ergibt das:
+Z nach oben. Die Werks-Firmware stellt `imuRotation = (0, 0, −90°)` ein und
+beschreibt die Einbaulage im Kommentar dazu (`imu.ino`) ausdrücklich: Chip oben,
+Sensor-X zeigt nach rechts, Sensor-Y nach vorn, umgerechnet `(y, −x, z)`. Also:
 
 - Sensor-Y zeigt nach vorn → Körper-X = Sensor-Y
 - Sensor-X zeigt nach rechts → Körper-Y = −Sensor-X
@@ -87,6 +89,30 @@ Fedora die Gruppe `dialout`:
 ```bash
 sudo usermod -aG dialout $USER     # danach ab- und wieder anmelden
 ```
+
+## Werks-Firmware zuerst ausprobieren
+
+Bevor du etwas änderst: Fliegt die Drohne mit der Werks-Firmware, ist die
+Hardware in Ordnung, und du hast einen Vergleich für später.
+
+- **Handy-Steuerung ab Werk:** WLAN `Drone_WiFi`, Passwort `12345678`, dann im
+  Browser `http://192.168.4.1` öffnen (die Seite öffnet sich nicht von selbst).
+- **Serielle Konsole**, Propeller ab:
+
+  ```bash
+  . ~/esp/esp-idf-v5.5.6/export.sh
+  python -m serial.tools.miniterm --eol LF /dev/ttyUSB0 115200   # beenden: Strg+]
+  ```
+
+  - `imu` zeigt den Lagesensor, erwartet: `model: MPU-6500` und `who am I: 0x70`
+  - `mfl`, `mfr`, `mrl`, `mrr` lassen je einen Motor 3 s mit 30 % laufen (vorne
+    links, vorne rechts, hinten links, hinten rechts). Prüfen: richtige Position,
+    **vorne links und hinten rechts drehen im Uhrzeigersinn**, die anderen
+    gegen den Uhrzeigersinn (von oben gesehen).
+
+Die fertige Werks-Firmware (`XW-Drone.ino.merged.bin`) bietet der Händler nur
+über Baidu an (Konto nötig). Am einfachsten geht es mit der eigenen Sicherung
+aus dem nächsten Schritt zurück.
 
 ## Werks-Firmware sichern (vor dem ersten Flashen!)
 
@@ -162,6 +188,10 @@ Jeder Punkt muss stimmen, bevor Propeller montiert werden.
 - Drohne eben hinstellen, bis „Bereit“ still liegen lassen (Kalibrierung).
 - Scharfschalten, Gas langsam erhöhen. Kippt oder dreht sie beim Abheben weg:
   sofort **NOT-AUS**.
-- Die Reglerwerte sind die ESP-Drone-Standardwerte. Der E1 Mini ist schwerer und
-  hat 8520-Motoren; wenn er schwingt oder träge reagiert, die Parameter
-  `pid_rate.*` und `pid_attitude.*` per cfclient (UDP) anpassen.
+- Die Reglerwerte sind die ESP-Drone-Standardwerte (Drehrate Roll/Nick: P 250,
+  I 500, D 2,5; Gier P 120; Lage P 5,9). Die Werks-Firmware nutzt für diesen
+  Rahmen, in ESP-Drone-Einheiten umgerechnet, etwa Drehrate P 137, I 229, D 2,3,
+  Gier P 343 und Lage P 6. Schwingt der E1 Mini oder dreht er träge um die
+  Hochachse, die Parameter `pid_rate.*` in diese Richtung ändern (per cfclient
+  über UDP). Umrechnung: Wert × 2 · 65535 / 57,3 für Roll und Nick (der
+  ESP-Drone-Mischer halbiert diese Anteile), × 65535 / 57,3 für Gier.

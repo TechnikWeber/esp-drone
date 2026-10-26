@@ -18,6 +18,7 @@
  * webctrl_core.c - platform independent part of the browser control.
  */
 
+#include <math.h>
 #include <string.h>
 
 #include "webctrl_core.h"
@@ -48,6 +49,21 @@ static void wr32(uint8_t *p, uint32_t v)
     p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16);
     p[3] = (uint8_t)(v >> 24);
+}
+
+static void wrf(uint8_t *p, float v)
+{
+    uint32_t u;
+    memcpy(&u, &v, sizeof(u));
+    wr32(p, u);
+}
+
+static float rdf(const uint8_t *p)
+{
+    const uint32_t u = rd32(p);
+    float v;
+    memcpy(&v, &u, sizeof(v));
+    return v;
 }
 
 static bool axisInRange(int16_t v)
@@ -204,6 +220,387 @@ bool wcDecodeTelemetry(const uint8_t *buf, size_t len, wcTelemetry_t *out)
     out->trim.roll = (int8_t)buf[36];
     out->trim.pitch = (int8_t)buf[37];
     return true;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Ground station messages                                                   */
+/* ------------------------------------------------------------------------ */
+
+static size_t boundedLen(const char *s, size_t max)
+{
+    size_t n = 0;
+    while (n < max && s[n] != '\0') {
+        n++;
+    }
+    return n;
+}
+
+static bool nameChar(char ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+}
+
+bool wcParamNameValid(const char *name)
+{
+    if (name == NULL) {
+        return false;
+    }
+    size_t n = 0;
+    size_t dotPos = 0;
+    int dots = 0;
+    for (; name[n] != '\0'; n++) {
+        if (n >= WC_PARAM_NAME_MAX) {
+            return false;
+        }
+        if (name[n] == '.') {
+            dots++;
+            dotPos = n;
+        } else if (!nameChar(name[n])) {
+            return false;
+        }
+    }
+    return dots == 1 && dotPos > 0 && dotPos + 1 < n;
+}
+
+/*
+ * PARAM layout:       0 type  1 op  2 reqId  3 reserved  4 value (f32)  8 name
+ * PARAM_REPLY layout: 0 type  1 op  2 reqId  3 status  4 value (f32)  8 default (f32)
+ *                     12 flags  13 reserved  14 name
+ * Names are not NUL terminated on the wire; their length follows from the frame.
+ */
+bool wcDecodeParamReq(const uint8_t *buf, size_t len, wcParamReq_t *out)
+{
+    if (buf == NULL || out == NULL || len < WC_PARAM_HDR_LEN || buf[0] != WC_MSG_PARAM ||
+        len > WC_PARAM_HDR_LEN + WC_PARAM_NAME_MAX || buf[1] > WC_PARAM_RESET) {
+        return false;
+    }
+    wcParamReq_t r;
+    memset(&r, 0, sizeof(r));
+    r.op = buf[1];
+    r.reqId = buf[2];
+    r.value = rdf(&buf[4]);
+    const size_t n = len - WC_PARAM_HDR_LEN;
+    memcpy(r.name, &buf[WC_PARAM_HDR_LEN], n);
+    r.name[n] = '\0';
+
+    const bool needsName = r.op == WC_PARAM_READ || r.op == WC_PARAM_WRITE;
+    if (needsName ? !wcParamNameValid(r.name) : n != 0) {
+        return false;
+    }
+    *out = r;
+    return true;
+}
+
+size_t wcEncodeParamReq(const wcParamReq_t *r, uint8_t *buf, size_t cap)
+{
+    if (r == NULL || buf == NULL) {
+        return 0;
+    }
+    const size_t n = boundedLen(r->name, sizeof(r->name));
+    if (n > WC_PARAM_NAME_MAX || cap < WC_PARAM_HDR_LEN + n) {
+        return 0;
+    }
+    buf[0] = WC_MSG_PARAM;
+    buf[1] = r->op;
+    buf[2] = r->reqId;
+    buf[3] = 0;
+    wrf(&buf[4], r->value);
+    memcpy(&buf[WC_PARAM_HDR_LEN], r->name, n);
+    return WC_PARAM_HDR_LEN + n;
+}
+
+size_t wcEncodeParamReply(const wcParamReply_t *r, uint8_t *buf, size_t cap)
+{
+    if (r == NULL || buf == NULL) {
+        return 0;
+    }
+    const size_t n = boundedLen(r->name, sizeof(r->name));
+    if (n > WC_PARAM_NAME_MAX || cap < WC_PARAM_REPLY_HDR_LEN + n) {
+        return 0;
+    }
+    buf[0] = WC_MSG_PARAM_REPLY;
+    buf[1] = r->op;
+    buf[2] = r->reqId;
+    buf[3] = r->status;
+    wrf(&buf[4], r->value);
+    wrf(&buf[8], r->dflt);
+    buf[12] = r->flags;
+    buf[13] = 0;
+    memcpy(&buf[WC_PARAM_REPLY_HDR_LEN], r->name, n);
+    return WC_PARAM_REPLY_HDR_LEN + n;
+}
+
+bool wcDecodeParamReply(const uint8_t *buf, size_t len, wcParamReply_t *out)
+{
+    if (buf == NULL || out == NULL || len < WC_PARAM_REPLY_HDR_LEN || buf[0] != WC_MSG_PARAM_REPLY ||
+        len > WC_PARAM_REPLY_HDR_LEN + WC_PARAM_NAME_MAX) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->op = buf[1];
+    out->reqId = buf[2];
+    out->status = buf[3];
+    out->value = rdf(&buf[4]);
+    out->dflt = rdf(&buf[8]);
+    out->flags = buf[12];
+    memcpy(out->name, &buf[WC_PARAM_REPLY_HDR_LEN], len - WC_PARAM_REPLY_HDR_LEN);
+    return true;
+}
+
+const char *const wcGainNames[WC_GAIN_COUNT] = {
+    "pid_rate.roll_kp", "pid_rate.roll_ki", "pid_rate.roll_kd",
+    "pid_rate.pitch_kp", "pid_rate.pitch_ki", "pid_rate.pitch_kd",
+    "pid_rate.yaw_kp", "pid_rate.yaw_ki", "pid_rate.yaw_kd",
+    "pid_attitude.roll_kp", "pid_attitude.roll_ki", "pid_attitude.roll_kd",
+    "pid_attitude.pitch_kp", "pid_attitude.pitch_ki", "pid_attitude.pitch_kd",
+    "pid_attitude.yaw_kp", "pid_attitude.yaw_ki", "pid_attitude.yaw_kd",
+};
+
+int wcGainIndex(const char *name)
+{
+    if (name == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        if (strcmp(name, wcGainNames[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool wcGainValueValid(float v)
+{
+    return isfinite(v) && v >= 0.0f && v <= WC_GAIN_MAX;
+}
+
+size_t wcEncodeGainsBlob(const float *values, uint8_t *buf, size_t cap)
+{
+    if (values == NULL || buf == NULL || cap < WC_GAINS_BLOB_LEN) {
+        return 0;
+    }
+    buf[0] = WC_GAINS_BLOB_VERSION;
+    buf[1] = WC_GAIN_COUNT;
+    buf[2] = 0;
+    buf[3] = 0;
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        wrf(&buf[4 + 4 * i], values[i]);
+    }
+    return WC_GAINS_BLOB_LEN;
+}
+
+bool wcDecodeGainsBlob(const uint8_t *buf, size_t len, float *values, bool *valid)
+{
+    if (buf == NULL || values == NULL || valid == NULL || len != WC_GAINS_BLOB_LEN ||
+        buf[0] != WC_GAINS_BLOB_VERSION || buf[1] != WC_GAIN_COUNT) {
+        return false;
+    }
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        values[i] = rdf(&buf[4 + 4 * i]);
+        valid[i] = wcGainValueValid(values[i]);
+    }
+    return true;
+}
+
+/* STREAM layout: 0 type  1 flags  2 reserved (2). Unknown flags are ignored. */
+bool wcDecodeStream(const uint8_t *buf, size_t len, uint8_t *flags)
+{
+    if (buf == NULL || flags == NULL || len != WC_STREAM_LEN || buf[0] != WC_MSG_STREAM) {
+        return false;
+    }
+    *flags = buf[1] & WC_STREAM_FAST;
+    return true;
+}
+
+size_t wcEncodeStream(uint8_t flags, uint8_t *buf, size_t cap)
+{
+    if (buf == NULL || cap < WC_STREAM_LEN) {
+        return 0;
+    }
+    buf[0] = WC_MSG_STREAM;
+    buf[1] = flags;
+    buf[2] = 0;
+    buf[3] = 0;
+    return WC_STREAM_LEN;
+}
+
+int16_t wcCentiDeg(float deg)
+{
+    return wcDeciDeg(deg * 10.0f);
+}
+
+int16_t wcDeciDeg(float deg)
+{
+    const float v = deg * 10.0f;
+    if (isnan(v)) {
+        return 0;
+    }
+    if (v >= 32767.0f) {
+        return 32767;
+    }
+    if (v <= -32767.0f) {
+        return -32767;
+    }
+    return (int16_t)lrintf(v);
+}
+
+uint16_t wcU16Sat(float v)
+{
+    if (isnan(v) || v <= 0.0f) {
+        return 0;
+    }
+    if (v >= 65535.0f) {
+        return 65535;
+    }
+    return (uint16_t)lrintf(v);
+}
+
+/*
+ * FAST layout: 0 type  1 count  2 seq  4 t0Ms (4)  8 periodMs  9 reserved (3)
+ * 12 samples of 32 bytes: roll pitch yaw rollSp pitchSp (i16, 1/100 deg),
+ * gyro roll pitch yaw, rate setpoint roll pitch yaw (i16, 1/10 deg/s),
+ * M1..M4 (u16), thrust (u16)
+ */
+size_t wcEncodeFast(const wcFast_t *f, uint8_t *buf, size_t cap)
+{
+    if (f == NULL || buf == NULL || f->count == 0 || f->count > WC_FAST_SAMPLES) {
+        return 0;
+    }
+    const size_t len = WC_FAST_HDR_LEN + (size_t)f->count * WC_FAST_SAMPLE_LEN;
+    if (cap < len) {
+        return 0;
+    }
+    memset(buf, 0, WC_FAST_HDR_LEN);
+    buf[0] = WC_MSG_FAST;
+    buf[1] = f->count;
+    wr16(&buf[2], f->seq);
+    wr32(&buf[4], f->t0Ms);
+    buf[8] = f->periodMs;
+    for (uint8_t i = 0; i < f->count; i++) {
+        const wcFastSample_t *s = &f->s[i];
+        uint8_t *p = &buf[WC_FAST_HDR_LEN + (size_t)i * WC_FAST_SAMPLE_LEN];
+        const int16_t v16[11] = {s->rollCdeg, s->pitchCdeg, s->yawCdeg, s->rollSpCdeg, s->pitchSpCdeg,
+                                 s->gyroDdps[0], s->gyroDdps[1], s->gyroDdps[2],
+                                 s->rateSpDdps[0], s->rateSpDdps[1], s->rateSpDdps[2]};
+        for (int k = 0; k < 11; k++) {
+            wr16(&p[2 * k], (uint16_t)v16[k]);
+        }
+        for (int m = 0; m < 4; m++) {
+            wr16(&p[22 + 2 * m], s->motor[m]);
+        }
+        wr16(&p[30], s->thrust);
+    }
+    return len;
+}
+
+bool wcDecodeFast(const uint8_t *buf, size_t len, wcFast_t *out)
+{
+    if (buf == NULL || out == NULL || len < WC_FAST_HDR_LEN || buf[0] != WC_MSG_FAST ||
+        buf[1] == 0 || buf[1] > WC_FAST_SAMPLES ||
+        len != WC_FAST_HDR_LEN + (size_t)buf[1] * WC_FAST_SAMPLE_LEN) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->count = buf[1];
+    out->seq = rd16(&buf[2]);
+    out->t0Ms = rd32(&buf[4]);
+    out->periodMs = buf[8];
+    for (uint8_t i = 0; i < out->count; i++) {
+        wcFastSample_t *s = &out->s[i];
+        const uint8_t *p = &buf[WC_FAST_HDR_LEN + (size_t)i * WC_FAST_SAMPLE_LEN];
+        s->rollCdeg = (int16_t)rd16(&p[0]);
+        s->pitchCdeg = (int16_t)rd16(&p[2]);
+        s->yawCdeg = (int16_t)rd16(&p[4]);
+        s->rollSpCdeg = (int16_t)rd16(&p[6]);
+        s->pitchSpCdeg = (int16_t)rd16(&p[8]);
+        for (int k = 0; k < 3; k++) {
+            s->gyroDdps[k] = (int16_t)rd16(&p[10 + 2 * k]);
+            s->rateSpDdps[k] = (int16_t)rd16(&p[16 + 2 * k]);
+        }
+        for (int m = 0; m < 4; m++) {
+            s->motor[m] = rd16(&p[22 + 2 * m]);
+        }
+        s->thrust = rd16(&p[30]);
+    }
+    return true;
+}
+
+/* MOTOR_TEST layout: 0 type  1 mask  2 percent  3 reserved  4 durationMs  6 reserved (2)
+ * MOTOR_REPLY layout: 0 type  1 mask  2 percent  3 status  4 durationMs  6 reserved (2) */
+bool wcDecodeMotorTest(const uint8_t *buf, size_t len, wcMotorTest_t *out)
+{
+    if (buf == NULL || out == NULL || len != WC_MOTOR_TEST_LEN || buf[0] != WC_MSG_MOTOR_TEST) {
+        return false;
+    }
+    const wcMotorTest_t m = {.mask = buf[1], .percent = buf[2], .durationMs = rd16(&buf[4])};
+    if (m.mask > 0x0F || m.percent > 100 || (m.mask != 0 && (m.percent == 0 || m.durationMs == 0))) {
+        return false;
+    }
+    *out = m;
+    return true;
+}
+
+size_t wcEncodeMotorTest(const wcMotorTest_t *m, uint8_t *buf, size_t cap)
+{
+    if (m == NULL || buf == NULL || cap < WC_MOTOR_TEST_LEN) {
+        return 0;
+    }
+    memset(buf, 0, WC_MOTOR_TEST_LEN);
+    buf[0] = WC_MSG_MOTOR_TEST;
+    buf[1] = m->mask;
+    buf[2] = m->percent;
+    wr16(&buf[4], m->durationMs);
+    return WC_MOTOR_TEST_LEN;
+}
+
+size_t wcEncodeMotorReply(const wcMotorReply_t *r, uint8_t *buf, size_t cap)
+{
+    if (r == NULL || buf == NULL || cap < WC_MOTOR_REPLY_LEN) {
+        return 0;
+    }
+    memset(buf, 0, WC_MOTOR_REPLY_LEN);
+    buf[0] = WC_MSG_MOTOR_REPLY;
+    buf[1] = r->mask;
+    buf[2] = r->percent;
+    buf[3] = r->status;
+    wr16(&buf[4], r->durationMs);
+    return WC_MOTOR_REPLY_LEN;
+}
+
+bool wcDecodeMotorReply(const uint8_t *buf, size_t len, wcMotorReply_t *out)
+{
+    if (buf == NULL || out == NULL || len != WC_MOTOR_REPLY_LEN || buf[0] != WC_MSG_MOTOR_REPLY) {
+        return false;
+    }
+    out->mask = buf[1];
+    out->percent = buf[2];
+    out->status = buf[3];
+    out->durationMs = rd16(&buf[4]);
+    return true;
+}
+
+wcMotorStatus_t wcMotorTestCheck(const wcMotorTestInputs_t *in, const wcMotorTest_t *req,
+                                 uint8_t maxPercent, wcMotorTest_t *applied)
+{
+    if (!in->enabled || maxPercent == 0) {
+        return WC_MOTOR_DISABLED;
+    }
+    if (in->busy) {
+        return WC_MOTOR_BUSY;
+    }
+    if (!in->systemReady) {
+        return WC_MOTOR_NOT_READY;
+    }
+    applied->mask = req->mask;
+    applied->percent = req->percent < maxPercent ? req->percent : maxPercent;
+    applied->durationMs = req->durationMs < WC_MOTOR_TEST_MAX_MS ? req->durationMs : WC_MOTOR_TEST_MAX_MS;
+    return WC_MOTOR_OK;
+}
+
+uint16_t wcMotorRatio(uint8_t percent)
+{
+    const uint32_t p = percent > 100 ? 100u : percent;
+    return (uint16_t)(p * 65535u / 100u);
 }
 
 /* ------------------------------------------------------------------------ */

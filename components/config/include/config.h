@@ -186,8 +186,9 @@
 #define WIFILINK_TASK_STACKSIZE       (4 * configBASE_STACK_SIZE)
 #define ZRANGER2_TASK_STACKSIZE       (4 * configBASE_STACK_SIZE)
 #define ZRANGER_TASK_STACKSIZE        (2 * configBASE_STACK_SIZE)
-// web control stacks in bytes, independent of BASE_STACK_SIZE (512 on the S2)
-#define WEBCTRL_TASK_STACKSIZE        3072
+// web control stacks in bytes, independent of BASE_STACK_SIZE (512 on the S2).
+// The web control task also reads and writes NVS (trim, stored gains).
+#define WEBCTRL_TASK_STACKSIZE        4096
 #define WEBCTRL_DNS_TASK_STACKSIZE    3072
 #define WEBCTRL_HTTPD_STACKSIZE       6144
 

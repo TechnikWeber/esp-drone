@@ -38,6 +38,10 @@ telemetry 20 Hz    ◀──── WS :81 ──────                    
   and Windows. The DHCP server also sets option 114 (RFC 8910) with the API
   address `/captive-portal/api` (RFC 8908).
 - The page also works in a normal browser at `http://192.168.43.42`.
+- The **desktop ground station** ([groundstation.md](groundstation.md)) uses
+  the same port 81: gamepad control, 100 Hz samples of the flight controller,
+  controller gains and a motor test. Phone and ground station can be connected
+  at the same time; one of them flies.
 
 ## Packet loss and delay
 
@@ -143,8 +147,13 @@ If the drone drifts sideways by itself while hovering, the trim corrects it: tap
 ## Protocol
 
 Binary WebSocket frames, little endian. Defined in
-`components/webctrl/include/webctrl_core.h`. Version 2: TRIM message, telemetry
-with 40 instead of 36 bytes (battery state, stop reason, trim).
+`components/webctrl/include/webctrl_core.h`.
+
+- Version 2: TRIM message, telemetry with 40 instead of 36 bytes (battery state,
+  stop reason, trim).
+- Version 3: STREAM, PARAM and MOTOR_TEST for the ground station, FAST samples,
+  motor test bit in the telemetry. All of it is optional: a page that only knows
+  version 2 works unchanged, and the drone ignores unknown message types.
 
 ### CONTROL (page → drone, 16 bytes, 50 Hz)
 
@@ -167,12 +176,13 @@ type, value range, unknown flags) are ignored.
 | Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x02` |
-| 1 | u8 | protocol version (2) |
+| 1 | u8 | protocol version (3) |
 | 4 | u32 | session token, 0 = new session |
 
 The drone answers with a text frame `{"t":"info", …}` (firmware, device,
-limits, failsafe times, battery limits `battery`, `trimMax`, `resumed`).
-Telemetry starts only after the HELLO.
+`proto`, limits, failsafe times, battery limits `battery`, `trimMax`,
+`resumed`; since version 3 also `fastHz` and `motorTest` with `maxPercent` and
+`maxMs`, `maxPercent` 0 = no motor test). Telemetry starts only after the HELLO.
 
 ### TRIM (page → drone, 4 bytes, on every change)
 
@@ -193,7 +203,7 @@ only from the pilot, and reports the valid values back in the telemetry.
 | 0 | u8 | `0x81` |
 | 1 | u8 | state: bit0 armed, bit1 you are the pilot, bit2 other controller, bit3 failsafe, bit4 battery low, bit5 release ARM first, bit6 ready, bit7 upside down |
 | 2 | u8 | failsafe stage 0…4 |
-| 3 | u8 | result of the last arming attempt |
+| 3 | u8 | result of the last arming attempt: 0 OK, 1 not ready, 2 throttle not down, 3 battery, 4 other controller, 5 upside down, 6 release ARM first, 7 motor test running |
 | 4 | u16 | sequence number of the last accepted command |
 | 6 | u16 | accepted commands per second |
 | 8 | u32 | send time of that command (echo → round trip time) |
@@ -202,33 +212,136 @@ only from the pilot, and reports the valid values back in the telemetry.
 | 20 | u16 | thrust sent to the controller 0…1000 |
 | 22 | u16 | dropped late commands |
 | 24 | u16 | extra delay of the last command in ms |
-| 26 | u8 | state 2: bit0 forced landing (battery empty), bit1 battery too low to arm (only on the ground) |
+| 26 | u8 | state 2: bit0 forced landing (battery empty), bit1 battery too low to arm (only on the ground), bit2 motor test running |
 | 27 | u8 | reason of the last stop: 0 none, 1 disarmed, 2 STOP, 3 link lost, 4 upside down, 5 battery empty, 6 disarmed elsewhere |
 | 28 | u32 | uptime of the drone in ms |
 | 32 | u32 | session token (to the pilot only) |
 | 36, 37 | i8 | roll and pitch trim in 1/10° |
 | 38 | u16 | reserved |
 
+### STREAM (client → drone, 4 bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x05` |
+| 1 | u8 | flags: bit0 FAST samples on |
+| 2 | u16 | reserved (0) |
+
+Off for every new connection; the phone page never asks for FAST samples.
+
+### FAST (drone → client, 12 + 32 × n bytes, 20 frames per second)
+
+Samples of the flight controller every 10 ms, five per frame, only to clients
+that switched them on. Lost frames show as a gap in the sample numbers.
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x82` |
+| 1 | u8 | number of samples n (1…5) |
+| 2 | u16 | number of the first sample (wraps) |
+| 4 | u32 | drone time of the first sample in ms |
+| 8 | u8 | time between samples in ms (10) |
+| 9 | 3 bytes | reserved |
+| 12 + 32·i | | sample i: |
+| +0, +2, +4 | i16 | roll, pitch, yaw in 1/100° (as in the telemetry) |
+| +6, +8 | i16 | roll and pitch setpoint of the attitude controller in 1/100° |
+| +10, +12, +14 | i16 | gyro roll, pitch, yaw in 1/10 °/s |
+| +16, +18, +20 | i16 | rate setpoints roll, pitch, yaw in 1/10 °/s |
+| +22 … +28 | u16 | motor outputs M1…M4, 0…65535 |
+| +30 | u16 | thrust to the mixer, 0…65535 (web control: at most 60000) |
+
+Rates are in the convention of the rate controller: roll + = to the right,
+pitch + = nose up, yaw + = counter-clockwise seen from above.
+
+### PARAM (client → drone, 8 + name bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x04` |
+| 1 | u8 | operation: 0 read, 1 write, 2 save, 3 reset |
+| 2 | u8 | request id (echoed) |
+| 3 | u8 | reserved (0) |
+| 4 | f32 | value (write) |
+| 8 | ASCII | parameter `group.name`, up to 31 characters, no terminator (read and write only) |
+
+Every firmware parameter can be read. Only the 18 controller gains
+`pid_rate.*` and `pid_attitude.*` (`roll_kp` … `yaw_kd`) can be written, with
+values from 0 to 5000; they take effect at once. In flight only the pilot may
+write. *Save* stores all gains in the drone's flash (NVS), where they replace
+the firmware defaults at the next start; *reset* sets the defaults again and
+erases the stored gains. Both only while nobody flies, because writing the
+flash pauses the flight controller for a few milliseconds.
+
+### PARAM_REPLY (drone → client, 14 + name bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x84` |
+| 1 | u8 | operation |
+| 2 | u8 | request id |
+| 3 | u8 | status: 0 OK, 1 unknown parameter, 2 not writable, 3 busy (someone flies, saving in flight, starting up), 4 value out of range, 5 flash error |
+| 4 | f32 | current value |
+| 8 | f32 | firmware default of a gain, NaN otherwise |
+| 12 | u8 | flags: bit0 writable (a gain), bit1 stored gains are in use |
+| 13 | u8 | reserved |
+| 14 | ASCII | parameter name |
+
+### MOTOR_TEST (client → drone, 8 bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x06` |
+| 1 | u8 | motors: bit0 M1 … bit3 M4; 0 = stop |
+| 2 | u8 | power in % (1…100) |
+| 3 | u8 | reserved (0) |
+| 4 | u16 | duration in ms |
+| 6 | u16 | reserved (0) |
+
+For the bench with the propellers off. The drone only starts it while nobody
+flies and the sensors are calibrated, and caps power
+(`WEBCTRL_MOTOR_TEST_MAX_PERCENT`, default 30 %, 0 = off) and duration (3 s).
+It stops on time, on STOP from any client, and when the starting client
+disconnects. Meanwhile nobody can arm (arm result 7). The motors get their
+ratio through the parameter group `motorPowerSet` while the drone is armed for
+the test.
+
+### MOTOR_REPLY (drone → client, 8 bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x86` |
+| 1 | u8 | motors as applied |
+| 2 | u8 | power in % as applied |
+| 3 | u8 | status: 0 OK, 1 not ready, 2 busy (armed or someone flies), 3 switched off |
+| 4 | u16 | duration in ms as applied |
+| 6 | u16 | reserved |
+
 ## Testing without a drone
 
-- **Unit tests** for the protocol, failsafe, delay estimator, resume, trim,
-  battery protection and DNS: `make -C components/webctrl/host_test`
+- **Unit tests** for the protocol (including the ground station messages),
+  failsafe, delay estimator, resume, trim, battery protection, gains, motor
+  test checks and DNS: `make -C components/webctrl/host_test`
 - **Simulated drone** for the page:
   `python3 tools/mock_drone.py --stall-every 6 --stall-ms 450`, then open
   `http://127.0.0.1:8080/?host=127.0.0.1:8081`. The option creates a TCP-like
   stall of 450 ms every 6 s. With `--vbat 3.45 --drain 0.02` the simulated
   battery starts nearly empty: after about 10 s of hovering the forced landing
-  begins. `&lang=de` or `&lang=en` in the address picks the language.
+  begins. `&lang=de` or `&lang=en` in the address picks the language. The
+  mock simulates the PID controller and the airframe (`--turbulence` sets the
+  gusts) and answers PARAM, STREAM and MOTOR_TEST; `--legacy` makes it behave
+  like firmware v0.2.
 - **Screenshots** for the README: `python3 tools/ui_screenshots.py` drives the
   page in headless Google Chrome against the simulated drone and rewrites
   `docs/images/webcontrol-*.png` (ImageMagick makes them smaller, if
-  installed).
+  installed). `python3 tools/groundstation/screenshots.py` does the same for
+  the ground station, with a simulated gamepad.
 
 ## Limits
 
 - **HTTP only**; a valid HTTPS certificate is not possible in the drone's
   Wi-Fi. Steering by tilting the phone, the Gamepad API and the Wake Lock API
-  need HTTPS and are therefore missing.
+  need HTTPS and are therefore missing on the phone page. Gamepads work in the
+  desktop ground station, which runs on `localhost` ([groundstation.md](groundstation.md)).
 - **Portal window:** iOS and Android open the page in a mini browser. On iOS
   "Cancel" may disconnect the Wi-Fi; Android may route normal apps over mobile
   data when there is "no internet". If in doubt, open the page in the normal

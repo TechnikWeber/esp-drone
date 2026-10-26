@@ -134,6 +134,17 @@ menu "ESPDrone web control (captive portal)"
             help
                 One of them can fly, the others see the telemetry.
 
+        config WEBCTRL_MOTOR_TEST_MAX_PERCENT
+            int "Motor test: highest power in percent (0 = no motor test)"
+            range 0 50
+            default 30
+            help
+                The desktop ground station (tools/groundstation) can spin single
+                motors on the bench, propellers off, to check the motor order
+                and direction. This caps the power; a test also stops after
+                3 seconds, when the ground station disconnects, or on STOP.
+                0 switches the motor test off.
+
     endif
 
 endmenu

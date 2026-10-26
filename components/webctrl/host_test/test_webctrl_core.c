@@ -591,6 +591,253 @@ static void testBattery(void)
     CHECK(!b.landing && b.volts == v);
 }
 
+static void testParamCodec(void)
+{
+    puts("param encode/decode");
+    CHECK(wcParamNameValid("pid_rate.roll_kp"));
+    CHECK(wcParamNameValid("a.b"));
+    CHECK(wcParamNameValid("motorPowerSet.m1"));
+    CHECK(!wcParamNameValid(NULL));
+    CHECK(!wcParamNameValid(""));
+    CHECK(!wcParamNameValid("pid_rate"));           // no dot
+    CHECK(!wcParamNameValid(".roll_kp"));           // empty group
+    CHECK(!wcParamNameValid("pid_rate."));          // empty name
+    CHECK(!wcParamNameValid("a.b.c"));              // two dots
+    CHECK(!wcParamNameValid("pid rate.kp"));        // space
+    CHECK(!wcParamNameValid("pid-rate.kp"));
+    CHECK(!wcParamNameValid("pid_rate.roll_kp\n"));
+    CHECK(wcParamNameValid("abcdefghijklmno.abcdefghijklmno"));    // 31 characters
+    CHECK(!wcParamNameValid("abcdefghijklmnop.abcdefghijklmno"));  // 32
+
+    uint8_t buf[64];
+    wcParamReq_t in = {.op = WC_PARAM_WRITE, .reqId = 200, .value = 137.25f};
+    strcpy(in.name, "pid_rate.pitch_kd");
+    size_t n = wcEncodeParamReq(&in, buf, sizeof(buf));
+    CHECK(n == WC_PARAM_HDR_LEN + strlen(in.name));
+    CHECK(buf[0] == WC_MSG_PARAM && buf[1] == WC_PARAM_WRITE && buf[2] == 200);
+    wcParamReq_t out;
+    CHECK(wcDecodeParamReq(buf, n, &out));
+    CHECK(out.op == WC_PARAM_WRITE && out.reqId == 200 && out.value == 137.25f);
+    CHECK(strcmp(out.name, "pid_rate.pitch_kd") == 0);
+
+    // the name ends with the frame, no terminator on the wire
+    CHECK(!wcDecodeParamReq(buf, n - 1, &out) || strcmp(out.name, "pid_rate.pitch_k") == 0);
+    CHECK(!wcDecodeParamReq(buf, WC_PARAM_HDR_LEN, &out));         // READ/WRITE need a name
+    CHECK(!wcDecodeParamReq(buf, WC_PARAM_HDR_LEN - 1, &out));
+    buf[1] = WC_PARAM_RESET + 1;
+    CHECK(!wcDecodeParamReq(buf, n, &out));                        // unknown op
+    buf[1] = WC_PARAM_SAVE;
+    CHECK(!wcDecodeParamReq(buf, n, &out));                        // SAVE without name only
+    CHECK(wcDecodeParamReq(buf, WC_PARAM_HDR_LEN, &out) && out.op == WC_PARAM_SAVE && out.name[0] == '\0');
+    buf[1] = WC_PARAM_READ;
+    buf[0] = WC_MSG_TRIM;
+    CHECK(!wcDecodeParamReq(buf, n, &out));
+    CHECK(!wcDecodeParamReq(NULL, n, &out));
+
+    // a frame longer than header + 31 characters is rejected
+    uint8_t big[WC_PARAM_HDR_LEN + WC_PARAM_NAME_MAX + 1];
+    memset(big, 'a', sizeof(big));
+    big[0] = WC_MSG_PARAM;
+    big[1] = WC_PARAM_READ;
+    big[WC_PARAM_HDR_LEN + 3] = '.';
+    CHECK(!wcDecodeParamReq(big, sizeof(big), &out));
+    CHECK(wcDecodeParamReq(big, sizeof(big) - 1, &out));
+    CHECK(strlen(out.name) == WC_PARAM_NAME_MAX);
+
+    // encoder refuses a buffer that is too small
+    CHECK(wcEncodeParamReq(&in, buf, WC_PARAM_HDR_LEN + 3) == 0);
+
+    wcParamReply_t rep = {.op = WC_PARAM_READ, .reqId = 7, .status = WC_PARAM_OK,
+                          .flags = WC_PARAMF_WRITABLE | WC_PARAMF_STORED, .value = 5.9f, .dflt = NAN};
+    strcpy(rep.name, "pid_attitude.roll_kp");
+    n = wcEncodeParamReply(&rep, buf, sizeof(buf));
+    CHECK(n == WC_PARAM_REPLY_HDR_LEN + strlen(rep.name));
+    wcParamReply_t rback;
+    CHECK(wcDecodeParamReply(buf, n, &rback));
+    CHECK(rback.op == WC_PARAM_READ && rback.reqId == 7 && rback.status == WC_PARAM_OK);
+    CHECK(rback.flags == (WC_PARAMF_WRITABLE | WC_PARAMF_STORED));
+    CHECK(rback.value == 5.9f && isnan(rback.dflt));
+    CHECK(strcmp(rback.name, rep.name) == 0);
+    CHECK(!wcDecodeParamReply(buf, WC_PARAM_REPLY_HDR_LEN - 1, &rback));
+    CHECK(n <= WC_PARAM_MAX_LEN);
+}
+
+static void testGains(void)
+{
+    puts("gains");
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        CHECK(wcParamNameValid(wcGainNames[i]));
+        CHECK(wcGainIndex(wcGainNames[i]) == i);
+    }
+    CHECK(wcGainIndex("pid_rate.roll") == -1);
+    CHECK(wcGainIndex("motorPowerSet.m1") == -1);
+    CHECK(wcGainIndex(NULL) == -1);
+
+    CHECK(wcGainValueValid(0.0f));
+    CHECK(wcGainValueValid(137.0f));
+    CHECK(wcGainValueValid(WC_GAIN_MAX));
+    CHECK(!wcGainValueValid(-0.1f));
+    CHECK(!wcGainValueValid(WC_GAIN_MAX + 1.0f));
+    CHECK(!wcGainValueValid(NAN));
+    CHECK(!wcGainValueValid(INFINITY));
+
+    float v[WC_GAIN_COUNT], back[WC_GAIN_COUNT];
+    bool valid[WC_GAIN_COUNT];
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        v[i] = 0.5f * (float)i;
+    }
+    v[4] = NAN;
+    v[5] = -3.0f;
+    uint8_t blob[WC_GAINS_BLOB_LEN];
+    CHECK(wcEncodeGainsBlob(v, blob, sizeof(blob)) == WC_GAINS_BLOB_LEN);
+    CHECK(wcEncodeGainsBlob(v, blob, sizeof(blob) - 1) == 0);
+    CHECK(wcDecodeGainsBlob(blob, sizeof(blob), back, valid));
+    int okCount = 0;
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        okCount += valid[i] ? 1 : 0;
+        if (valid[i]) {
+            CHECK(back[i] == v[i]);
+        }
+    }
+    CHECK(okCount == WC_GAIN_COUNT - 2 && !valid[4] && !valid[5]);
+    CHECK(!wcDecodeGainsBlob(blob, sizeof(blob) - 1, back, valid));
+    blob[0] = WC_GAINS_BLOB_VERSION + 1;
+    CHECK(!wcDecodeGainsBlob(blob, sizeof(blob), back, valid));
+    blob[0] = WC_GAINS_BLOB_VERSION;
+    blob[1] = WC_GAIN_COUNT - 1;
+    CHECK(!wcDecodeGainsBlob(blob, sizeof(blob), back, valid));
+}
+
+static void testStreamAndFast(void)
+{
+    puts("stream and fast samples");
+    uint8_t buf[WC_FAST_MAX_LEN + 8];
+    uint8_t flags = 0xFF;
+    CHECK(wcEncodeStream(WC_STREAM_FAST, buf, sizeof(buf)) == WC_STREAM_LEN);
+    CHECK(wcDecodeStream(buf, WC_STREAM_LEN, &flags) && flags == WC_STREAM_FAST);
+    buf[1] = 0xFE;                                   // unknown bits are ignored
+    CHECK(wcDecodeStream(buf, WC_STREAM_LEN, &flags) && flags == 0);
+    CHECK(!wcDecodeStream(buf, WC_STREAM_LEN + 1, &flags));
+    buf[0] = WC_MSG_TRIM;
+    CHECK(!wcDecodeStream(buf, WC_STREAM_LEN, &flags));
+
+    wcFast_t f;
+    memset(&f, 0, sizeof(f));
+    f.seq = 65534;
+    f.t0Ms = 123456789;
+    f.periodMs = WC_FAST_PERIOD_MS;
+    f.count = WC_FAST_SAMPLES;
+    for (int i = 0; i < WC_FAST_SAMPLES; i++) {
+        wcFastSample_t *s = &f.s[i];
+        s->rollCdeg = (int16_t)(100 * i - 250);
+        s->pitchCdeg = (int16_t)(-32767 + i);
+        s->yawCdeg = 18000;
+        s->rollSpCdeg = (int16_t)(-1500 + i);
+        s->pitchSpCdeg = 1500;
+        s->gyroDdps[0] = -20000;
+        s->gyroDdps[1] = 3;
+        s->gyroDdps[2] = (int16_t)i;
+        s->rateSpDdps[0] = 32767;
+        s->rateSpDdps[1] = -1;
+        s->rateSpDdps[2] = 0;
+        s->motor[0] = 65535;
+        s->motor[1] = 0;
+        s->motor[2] = (uint16_t)(1000 * i);
+        s->motor[3] = 30000;
+        s->thrust = 42000;
+    }
+    size_t n = wcEncodeFast(&f, buf, sizeof(buf));
+    CHECK(n == WC_FAST_MAX_LEN);
+    CHECK(buf[0] == WC_MSG_FAST && buf[1] == WC_FAST_SAMPLES);
+    wcFast_t g;
+    CHECK(wcDecodeFast(buf, n, &g));
+    CHECK(g.seq == f.seq && g.t0Ms == f.t0Ms && g.periodMs == f.periodMs && g.count == f.count);
+    CHECK(memcmp(g.s, f.s, sizeof(f.s)) == 0);
+    CHECK(!wcDecodeFast(buf, n - 1, &g));
+    CHECK(!wcDecodeFast(buf, n + 1, &g));
+    buf[1] = 2;                                      // count does not match the length
+    CHECK(!wcDecodeFast(buf, n, &g));
+    buf[1] = 0;
+    CHECK(!wcDecodeFast(buf, WC_FAST_HDR_LEN, &g));
+
+    f.count = 1;
+    n = wcEncodeFast(&f, buf, sizeof(buf));
+    CHECK(n == WC_FAST_HDR_LEN + WC_FAST_SAMPLE_LEN);
+    CHECK(wcDecodeFast(buf, n, &g) && g.count == 1 && memcmp(&g.s[0], &f.s[0], sizeof(f.s[0])) == 0);
+    f.count = 0;
+    CHECK(wcEncodeFast(&f, buf, sizeof(buf)) == 0);
+    f.count = WC_FAST_SAMPLES + 1;
+    CHECK(wcEncodeFast(&f, buf, sizeof(buf)) == 0);
+    f.count = WC_FAST_SAMPLES;
+    CHECK(wcEncodeFast(&f, buf, WC_FAST_MAX_LEN - 1) == 0);
+
+    CHECK(wcCentiDeg(12.345f) == 1235 || wcCentiDeg(12.345f) == 1234);
+    CHECK(wcCentiDeg(-1.0f) == -100);
+    CHECK(wcCentiDeg(400.0f) == 32767);
+    CHECK(wcCentiDeg(-400.0f) == -32767);
+    CHECK(wcCentiDeg(NAN) == 0);
+    CHECK(wcDeciDeg(-123.4f) == -1234);
+    CHECK(wcDeciDeg(5000.0f) == 32767);
+    CHECK(wcU16Sat(-5.0f) == 0);
+    CHECK(wcU16Sat(70000.0f) == 65535);
+    CHECK(wcU16Sat(NAN) == 0);
+    CHECK(wcU16Sat(42000.4f) == 42000);
+}
+
+static void testMotorTest(void)
+{
+    puts("motor test");
+    uint8_t buf[WC_MOTOR_TEST_LEN];
+    wcMotorTest_t m = {.mask = 0x05, .percent = 20, .durationMs = 2000}, out;
+    CHECK(wcEncodeMotorTest(&m, buf, sizeof(buf)) == WC_MOTOR_TEST_LEN);
+    CHECK(wcDecodeMotorTest(buf, sizeof(buf), &out));
+    CHECK(out.mask == 0x05 && out.percent == 20 && out.durationMs == 2000);
+    CHECK(!wcDecodeMotorTest(buf, sizeof(buf) - 1, &out));
+
+    const wcMotorTest_t bad[] = {
+        {.mask = 0x10, .percent = 20, .durationMs = 1000},   // no motor 5
+        {.mask = 0x01, .percent = 101, .durationMs = 1000},
+        {.mask = 0x01, .percent = 0, .durationMs = 1000},    // start without power
+        {.mask = 0x01, .percent = 10, .durationMs = 0},      // start without time
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        wcEncodeMotorTest(&bad[i], buf, sizeof(buf));
+        CHECK(!wcDecodeMotorTest(buf, sizeof(buf), &out));
+    }
+    const wcMotorTest_t stop = {0};
+    wcEncodeMotorTest(&stop, buf, sizeof(buf));
+    CHECK(wcDecodeMotorTest(buf, sizeof(buf), &out) && out.mask == 0);
+
+    wcMotorTestInputs_t in = {.enabled = true, .systemReady = true, .busy = false};
+    wcMotorTest_t applied = {0};
+    const wcMotorTest_t req = {.mask = 0x0F, .percent = 80, .durationMs = 10000};
+    CHECK(wcMotorTestCheck(&in, &req, 30, &applied) == WC_MOTOR_OK);
+    CHECK(applied.mask == 0x0F && applied.percent == 30 && applied.durationMs == WC_MOTOR_TEST_MAX_MS);
+    const wcMotorTest_t small = {.mask = 0x02, .percent = 10, .durationMs = 1500};
+    CHECK(wcMotorTestCheck(&in, &small, 30, &applied) == WC_MOTOR_OK);
+    CHECK(applied.mask == 0x02 && applied.percent == 10 && applied.durationMs == 1500);
+    CHECK(wcMotorTestCheck(&in, &small, 0, &applied) == WC_MOTOR_DISABLED);
+    in.busy = true;
+    in.systemReady = false;
+    CHECK(wcMotorTestCheck(&in, &small, 30, &applied) == WC_MOTOR_BUSY);
+    in.busy = false;
+    CHECK(wcMotorTestCheck(&in, &small, 30, &applied) == WC_MOTOR_NOT_READY);
+    in.enabled = false;
+    CHECK(wcMotorTestCheck(&in, &small, 30, &applied) == WC_MOTOR_DISABLED);
+
+    CHECK(wcMotorRatio(0) == 0);
+    CHECK(wcMotorRatio(100) == 65535);
+    CHECK(wcMotorRatio(50) == 32767);
+    CHECK(wcMotorRatio(200) == 65535);
+
+    const wcMotorReply_t rep = {.mask = 0x08, .percent = 15, .status = WC_MOTOR_BUSY, .durationMs = 2500};
+    wcMotorReply_t rback;
+    uint8_t rb[WC_MOTOR_REPLY_LEN];
+    CHECK(wcEncodeMotorReply(&rep, rb, sizeof(rb)) == WC_MOTOR_REPLY_LEN);
+    CHECK(wcDecodeMotorReply(rb, sizeof(rb), &rback));
+    CHECK(rback.mask == 0x08 && rback.percent == 15 && rback.status == WC_MOTOR_BUSY && rback.durationMs == 2500);
+}
+
 int main(void)
 {
     testControlRoundTrip();
@@ -607,6 +854,10 @@ int main(void)
     testControlToSetpoint();
     testTrim();
     testBattery();
+    testParamCodec();
+    testGains();
+    testStreamAndFast();
+    testMotorTest();
 
     printf("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

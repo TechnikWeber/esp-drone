@@ -34,18 +34,31 @@
 /* Wire protocol: binary WebSocket frames, little endian                     */
 /* ------------------------------------------------------------------------ */
 
-/* 2: TRIM message; telemetry 40 bytes with state2, stop reason and trim */
-#define WC_PROTOCOL_VERSION   2
+/*
+ * 2: TRIM message; telemetry 40 bytes with state2, stop reason and trim
+ * 3: PARAM, STREAM and MOTOR_TEST for the ground station, FAST samples
+ *    (all optional: a version 2 page works unchanged)
+ */
+#define WC_PROTOCOL_VERSION   3
 
 #define WC_MSG_CONTROL        0x01  /* client -> drone */
 #define WC_MSG_HELLO          0x02  /* client -> drone, first frame after connect */
 #define WC_MSG_TRIM           0x03  /* client -> drone, when the pilot trims */
+#define WC_MSG_PARAM          0x04  /* client -> drone: read, write, save or reset a gain */
+#define WC_MSG_STREAM         0x05  /* client -> drone: FAST samples on or off */
+#define WC_MSG_MOTOR_TEST     0x06  /* client -> drone: spin motors on the bench */
 #define WC_MSG_TELEMETRY      0x81  /* drone -> client */
+#define WC_MSG_FAST           0x82  /* drone -> client that asked for it, 20 frames/s */
+#define WC_MSG_PARAM_REPLY    0x84  /* drone -> client, answer to PARAM */
+#define WC_MSG_MOTOR_REPLY    0x86  /* drone -> client, answer to MOTOR_TEST */
 
 #define WC_CONTROL_LEN        16
 #define WC_HELLO_LEN          8
 #define WC_TRIM_LEN           4
 #define WC_TELEMETRY_LEN      40
+#define WC_STREAM_LEN         4
+#define WC_MOTOR_TEST_LEN     8
+#define WC_MOTOR_REPLY_LEN    8
 
 /* CONTROL flags */
 #define WC_FLAG_ARM           0x01  /* pilot wants the motors armed (level, not edge) */
@@ -94,6 +107,7 @@ typedef struct {
 /* TELEMETRY state2 bits */
 #define WC_STATE2_BAT_LANDING 0x01  /* battery empty in flight: forced landing */
 #define WC_STATE2_BAT_NO_ARM  0x02  /* battery too low to arm (only sent while nobody flies) */
+#define WC_STATE2_MOTOR_TEST  0x04  /* a motor test is running */
 
 /* Why the last web pilot session ended */
 typedef enum {
@@ -114,6 +128,7 @@ typedef enum {
     WC_ARM_OTHER_PILOT,     /* another source holds the arm */
     WC_ARM_TUMBLED,
     WC_ARM_RELEASE_FIRST,   /* ARM flag has to go off once (after kill/failsafe) */
+    WC_ARM_MOTOR_TEST,      /* a motor test is running */
 } wcArmResult_t;
 
 typedef struct {
@@ -148,6 +163,164 @@ size_t wcEncodeTelemetry(const wcTelemetry_t *t, uint8_t *buf, size_t cap);
 size_t wcEncodeControl(const wcControl_t *c, uint8_t *buf, size_t cap);
 size_t wcEncodeTrim(const wcTrim_t *t, uint8_t *buf, size_t cap);
 bool wcDecodeTelemetry(const uint8_t *buf, size_t len, wcTelemetry_t *out);
+
+/* ------------------------------------------------------------------------ */
+/* Ground station messages (protocol 3)                                      */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * PARAM: read any parameter of the firmware by name ("group.name"); write,
+ * save and reset only the controller gains (wcGainNames). Every request gets
+ * a PARAM_REPLY on the same connection.
+ */
+#define WC_PARAM_HDR_LEN        8
+#define WC_PARAM_REPLY_HDR_LEN  14
+#define WC_PARAM_NAME_MAX       31
+#define WC_PARAM_MAX_LEN        (WC_PARAM_REPLY_HDR_LEN + WC_PARAM_NAME_MAX)
+
+typedef enum {
+    WC_PARAM_READ = 0,
+    WC_PARAM_WRITE,     /* a gain, takes effect at once (RAM only) */
+    WC_PARAM_SAVE,      /* store all gains on the drone; they are loaded at boot */
+    WC_PARAM_RESET,     /* all gains back to the firmware defaults, stored ones erased */
+} wcParamOp_t;
+
+typedef enum {
+    WC_PARAM_OK = 0,
+    WC_PARAM_UNKNOWN,   /* no parameter of that name */
+    WC_PARAM_DENIED,    /* not a gain: read only over this channel */
+    WC_PARAM_BUSY,      /* someone else flies, or saving in flight, or still starting */
+    WC_PARAM_INVALID,   /* value out of range */
+    WC_PARAM_FAILED,    /* flash error */
+} wcParamStatus_t;
+
+#define WC_PARAMF_WRITABLE      0x01  /* the parameter is a gain */
+#define WC_PARAMF_STORED        0x02  /* gains stored on the drone are active */
+
+typedef struct {
+    uint8_t op;         /* wcParamOp_t */
+    uint8_t reqId;      /* echoed in the reply */
+    float   value;      /* WRITE */
+    char    name[WC_PARAM_NAME_MAX + 1];   /* READ / WRITE, empty for SAVE / RESET */
+} wcParamReq_t;
+
+typedef struct {
+    uint8_t op;
+    uint8_t reqId;
+    uint8_t status;     /* wcParamStatus_t */
+    uint8_t flags;      /* WC_PARAMF_* */
+    float   value;      /* current value */
+    float   dflt;       /* firmware default of a gain, NaN otherwise */
+    char    name[WC_PARAM_NAME_MAX + 1];
+} wcParamReply_t;
+
+/* Names: "group.name", letters, digits and '_', one dot, at most WC_PARAM_NAME_MAX */
+bool wcParamNameValid(const char *name);
+bool wcDecodeParamReq(const uint8_t *buf, size_t len, wcParamReq_t *out);
+size_t wcEncodeParamReq(const wcParamReq_t *r, uint8_t *buf, size_t cap);
+size_t wcEncodeParamReply(const wcParamReply_t *r, uint8_t *buf, size_t cap);
+bool wcDecodeParamReply(const uint8_t *buf, size_t len, wcParamReply_t *out);
+
+/* Controller gains that may be changed over the network: rate and attitude
+ * PID of roll, pitch and yaw. */
+#define WC_GAIN_COUNT           18
+#define WC_GAIN_MAX             5000.0f
+extern const char *const wcGainNames[WC_GAIN_COUNT];
+int wcGainIndex(const char *name);      /* -1 if not a gain */
+bool wcGainValueValid(float v);         /* finite, 0..WC_GAIN_MAX */
+
+/* Stored gains (NVS blob): version, count, reserved (2), WC_GAIN_COUNT floats */
+#define WC_GAINS_BLOB_VERSION   1
+#define WC_GAINS_BLOB_LEN       (4 + 4 * WC_GAIN_COUNT)
+size_t wcEncodeGainsBlob(const float *values, uint8_t *buf, size_t cap);
+/* valid[i] tells which values passed the checks; false if the blob is unusable */
+bool wcDecodeGainsBlob(const uint8_t *buf, size_t len, float *values, bool *valid);
+
+/* STREAM: flags of what the client wants besides TELEMETRY */
+#define WC_STREAM_FAST          0x01
+
+bool wcDecodeStream(const uint8_t *buf, size_t len, uint8_t *flags);
+size_t wcEncodeStream(uint8_t flags, uint8_t *buf, size_t cap);
+
+/*
+ * FAST: samples of the flight controller every WC_FAST_PERIOD_MS, sent in
+ * frames of WC_FAST_SAMPLES samples. Angles as in the telemetry (roll + =
+ * right side down, pitch + = nose up). Rates in the convention of the rate
+ * controller: roll + = to the right, pitch + = nose up, yaw + = counter-
+ * clockwise seen from above.
+ */
+#define WC_FAST_PERIOD_MS       10
+#define WC_FAST_SAMPLES         5
+#define WC_FAST_HDR_LEN         12
+#define WC_FAST_SAMPLE_LEN      32
+#define WC_FAST_MAX_LEN         (WC_FAST_HDR_LEN + WC_FAST_SAMPLES * WC_FAST_SAMPLE_LEN)
+
+typedef struct {
+    int16_t  rollCdeg, pitchCdeg, yawCdeg;     /* attitude estimate */
+    int16_t  rollSpCdeg, pitchSpCdeg;          /* attitude setpoint of the controller */
+    int16_t  gyroDdps[3];                      /* roll, pitch, yaw rate, 1/10 deg/s */
+    int16_t  rateSpDdps[3];                    /* rate setpoints, 1/10 deg/s */
+    uint16_t motor[4];                         /* M1..M4, 0..65535 */
+    uint16_t thrust;                           /* thrust to the mixer, 0..65535 */
+} wcFastSample_t;
+
+typedef struct {
+    uint16_t       seq;       /* number of the first sample (wraps) */
+    uint32_t       t0Ms;      /* drone time of the first sample */
+    uint8_t        periodMs;
+    uint8_t        count;     /* 1..WC_FAST_SAMPLES */
+    wcFastSample_t s[WC_FAST_SAMPLES];
+} wcFast_t;
+
+size_t wcEncodeFast(const wcFast_t *f, uint8_t *buf, size_t cap);
+bool wcDecodeFast(const uint8_t *buf, size_t len, wcFast_t *out);
+/* float to fixed point with saturation */
+int16_t wcCentiDeg(float deg);
+int16_t wcDeciDeg(float deg);
+uint16_t wcU16Sat(float v);
+
+/*
+ * MOTOR_TEST: spin single motors on the bench, propellers off. Only while
+ * nobody flies; the drone caps power and duration and stops the motors when
+ * the time is up, the client leaves, or anyone sends KILL.
+ */
+#define WC_MOTOR_TEST_MAX_MS    3000
+
+typedef struct {
+    uint8_t  mask;        /* bit 0 = M1 ... bit 3 = M4; 0 = stop */
+    uint8_t  percent;     /* power 1..100 */
+    uint16_t durationMs;
+} wcMotorTest_t;
+
+typedef enum {
+    WC_MOTOR_OK = 0,
+    WC_MOTOR_NOT_READY,   /* self test or calibration not done */
+    WC_MOTOR_BUSY,        /* armed or someone flies */
+    WC_MOTOR_DISABLED,    /* switched off in the firmware configuration */
+} wcMotorStatus_t;
+
+typedef struct {
+    uint8_t  mask;
+    uint8_t  percent;     /* as applied */
+    uint8_t  status;      /* wcMotorStatus_t */
+    uint16_t durationMs;  /* as applied */
+} wcMotorReply_t;
+
+typedef struct {
+    bool enabled;         /* compiled in (max percent > 0) and the motors can be set */
+    bool systemReady;
+    bool busy;            /* a pilot session or another source holds the arm */
+} wcMotorTestInputs_t;
+
+bool wcDecodeMotorTest(const uint8_t *buf, size_t len, wcMotorTest_t *out);
+size_t wcEncodeMotorTest(const wcMotorTest_t *m, uint8_t *buf, size_t cap);
+size_t wcEncodeMotorReply(const wcMotorReply_t *r, uint8_t *buf, size_t cap);
+bool wcDecodeMotorReply(const uint8_t *buf, size_t len, wcMotorReply_t *out);
+/* Checks a start request (mask != 0) and caps power and duration into applied. */
+wcMotorStatus_t wcMotorTestCheck(const wcMotorTestInputs_t *in, const wcMotorTest_t *req,
+                                 uint8_t maxPercent, wcMotorTest_t *applied);
+/* Motor ratio (0..65535) for a power in percent */
+uint16_t wcMotorRatio(uint8_t percent);
 
 /* true if sequence number a is newer than b (wrap safe) */
 static inline bool wcSeqNewer(uint16_t a, uint16_t b)

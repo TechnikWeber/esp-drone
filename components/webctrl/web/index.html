@@ -104,10 +104,10 @@ button:disabled{opacity:.45}
 <script>
 "use strict";
 // ---- protocol (docs/webcontrol.md) --------------------------------------
-const PROTO = 2, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 40;
+const PROTO = 3, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 40;
 const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
 const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
-const S2_BAT_LAND = 1, S2_BAT_NOARM = 2;
+const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4;
 const STOP_BATTERY = 5;
 const TRIM_STEP = 5;   // 0.5° in 1/10°
 const SEND_MS = 20, TELEMETRY_WARN_MS = 600, TELEMETRY_DEAD_MS = 2500;
@@ -136,14 +136,14 @@ const TEXT = {
       "Link lost – drone is descending", "Motors off"],
     armReasons: ["", "Drone not ready (self test or calibration – keep it still)", "Throttle all the way down to arm",
       "Battery too low", "Another controller is active (app, cfclient, other phone)", "Drone is upside down",
-      "Release first, then arm again"],
+      "Release first, then arm again", "Motor test running (ground station)"],
     stopReasons: ["", "Disarmed", "STOP – motors off", "Link lost – motors off, arm again",
       "Drone was upside down – motors off", "Battery empty – landed, please charge", "Disarmed by another controller"],
     motorsOff: "Motors off – arm again", disarmedToast: "Disarmed",
     msgPoorLink: "Poor link – the drone takes over shortly", msgNoLink: "No connection – looking for the drone…",
     msgBatLand: "Battery empty – the drone is landing. Throttle down after touchdown",
     msgTumbled: "Drone is upside down", msgBatLow: "Battery low – land soon", msgBatEmpty: "Battery empty – please charge",
-    msgOther: "Someone else is flying", msgCalibrating: "Calibrating – keep the drone still",
+    msgOther: "Someone else is flying", msgMotorTest: "Motor test running (ground station)", msgCalibrating: "Calibrating – keep the drone still",
     msgFlying: "Ready – have fun", msgIdle: "Throttle down, then hold “Arm” for 1 s",
     dinfo: (j) => `${j.device || "Drone"} · firmware ${j.fw || "?"} · protocol ${j.proto} · max ${j.maxAngle}° / ${j.maxYawRate}°/s`,
     dfs: (f) => `hold up to ${f.hold} ms, level out up to ${f.descend} ms, motors off after ${f.off} ms; ` +
@@ -186,7 +186,7 @@ const TEXT = {
       "Verbindung weg – Drohne sinkt ab", "Motoren aus"],
     armReasons: ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, Drohne still hinstellen)",
       "Gas ganz runter zum Scharfschalten", "Akku zu schwach", "Andere Steuerung aktiv (App/cfclient/anderes Handy)",
-      "Drohne liegt auf dem Kopf", "Erst loslassen, dann neu scharfschalten"],
+      "Drohne liegt auf dem Kopf", "Erst loslassen, dann neu scharfschalten", "Motortest läuft (Bodenstation)"],
     stopReasons: ["", "Entschärft", "NOT-AUS – Motoren aus", "Verbindung verloren – Motoren aus, neu scharfschalten",
       "Drohne lag auf dem Kopf – Motoren aus", "Akku leer – gelandet, bitte laden", "Andere Steuerung hat entschärft"],
     motorsOff: "Motoren aus – neu scharfschalten", disarmedToast: "Entschärft",
@@ -194,7 +194,7 @@ const TEXT = {
     msgNoLink: "Keine Verbindung – suche Drohne…",
     msgBatLand: "Akku leer – Drohne landet. Nach dem Aufsetzen Gas ganz runter",
     msgTumbled: "Drohne liegt auf dem Kopf", msgBatLow: "Akku schwach – bitte bald landen",
-    msgBatEmpty: "Akku leer – bitte laden", msgOther: "Eine andere Steuerung fliegt gerade",
+    msgBatEmpty: "Akku leer – bitte laden", msgOther: "Eine andere Steuerung fliegt gerade", msgMotorTest: "Motortest läuft (Bodenstation)",
     msgCalibrating: "Drohne kalibriert – bitte still hinstellen", msgFlying: "Bereit – viel Spaß",
     msgIdle: "Gas runter, dann „Scharfschalten“ 1 s halten",
     dinfo: (j) => `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`,
@@ -551,7 +551,7 @@ function render() {
   armBtn.classList.toggle("armed", armReq);
   if (armReq) { label.textContent = t("disarm"); armBtn.disabled = false; }
   else if (!(s & S_READY)) { label.textContent = t("notReady"); armBtn.disabled = true; }
-  else if (s & S_OTHER) { label.textContent = t("inUse"); armBtn.disabled = true; }
+  else if ((s & S_OTHER) || (s2 & S2_MOTOR_TEST)) { label.textContent = t("inUse"); armBtn.disabled = true; }
   else if (s2 & S2_BAT_NOARM) { label.textContent = t("batteryEmpty"); armBtn.disabled = true; }
   else { label.textContent = t("arm"); armBtn.disabled = false; }
 
@@ -568,6 +568,7 @@ function render() {
   else if (flying && (s & S_LOWBAT)) { text = t("msgBatLow"); cls = "warn"; }
   else if (!flying && ((s2 & S2_BAT_NOARM) || (s & S_LOWBAT))) { text = t("msgBatEmpty"); cls = "warn"; }
   else if (s & S_OTHER) { text = t("msgOther"); cls = "warn"; }
+  else if (s2 & S2_MOTOR_TEST) { text = t("msgMotorTest"); cls = "warn"; }
   else if (!(s & S_READY)) { text = t("msgCalibrating"); cls = "warn"; }
   else if (flying) { text = t("msgFlying"); cls = "ok"; }
   else { text = t("msgIdle"); cls = "info"; }

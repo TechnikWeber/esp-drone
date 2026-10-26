@@ -24,6 +24,9 @@
  *  - A 100 Hz task turns the pilot's last fresh command (plus trim) into
  *    setpoints and runs the link loss failsafe and the battery protection
  *    (webctrl_core.c). Telemetry goes out at 20 Hz.
+ *  - For the desktop ground station (tools/groundstation): 100 Hz samples of
+ *    the flight controller, the controller gains (read, change, store) and a
+ *    motor test for the bench.
  *
  * Protocol and behaviour: docs/webcontrol.md
  */
@@ -50,6 +53,7 @@
 #include "config.h"
 #include "commander.h"
 #include "log.h"
+#include "param.h"
 #include "platform.h"
 #include "pm_esplane.h"
 #include "sensors.h"
@@ -75,6 +79,7 @@ static const char *TAG = "WEBCTRL";
 
 #define WEBCTRL_NVS_NAMESPACE "webctrl"
 #define WEBCTRL_NVS_TRIM      "trim"
+#define WEBCTRL_NVS_GAINS     "gains"
 #define WEBCTRL_TRIM_SAVE_MS  1000   /* save this long after the last change */
 
 extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
@@ -93,6 +98,8 @@ typedef struct {
     uint16_t rxRate;
     bool     txPending;
     uint8_t  tx[WC_TELEMETRY_LEN];
+    bool     fast;           /* wants FAST samples (STREAM) */
+    bool     fastPending;    /* the current FAST frame is not sent yet */
 } wcClient_t;
 
 static const wcConfig_t cfg = {
@@ -141,6 +148,35 @@ static char capportUri[64];
 static logVarId_t logRoll, logPitch, logYaw;
 static volatile bool telemetryQueued;
 static uint32_t telemetrySkipped;    /* socket busy: frame not sent */
+
+/* FAST samples for the ground station: collected every 10 ms while a client
+ * wants them, sent in frames of WC_FAST_SAMPLES. */
+static logVarId_t logRollSp, logPitchSp, logGyro[3], logRateSp[3], logMotor[4], logThrust;
+static wcFast_t fastFrame;
+static uint16_t fastSeq;
+static uint8_t fastTx[WC_FAST_MAX_LEN];
+static size_t fastTxLen;
+static bool fastWanted;              /* at least one client asked for FAST */
+
+/* Controller gains for the ground station. Defaults are the values the
+ * firmware starts with; gains stored in NVS replace them at boot. */
+static paramVarId_t gainIds[WC_GAIN_COUNT];
+static float gainDefaults[WC_GAIN_COUNT];
+static bool gainsReady;              /* ids resolved, defaults read, stored gains applied */
+static bool gainsStored;             /* gains from NVS are in use */
+
+/* Motor test: the motors get fixed ratios (parameter group motorPowerSet,
+ * used by the power distribution while armed) for a limited time. */
+static paramVarId_t motorSetEnable, motorSetRatio[4];
+static bool motorTestAvailable;
+static struct {
+    bool     active;
+    int      ownerFd;                /* connection that started it */
+    uint8_t  mask;
+    uint8_t  percent;
+    uint32_t startMs;
+    uint32_t durationMs;
+} motorTest;
 
 static uint32_t nowMs(void)
 {
@@ -247,9 +283,84 @@ static void endPilotSession(bool failsafe, wcStopReason_t reason, const char *wh
     ESP_LOGW(TAG, "disarmed: %s", why);
 }
 
+static bool systemReady(void)
+{
+    return systemIsStarted() && sensorsAreCalibrated();
+}
+
+/* ------------------------------------------------------------------------ */
+/* Motor test (lock held)                                                    */
+/* ------------------------------------------------------------------------ */
+
+static void motorTestSetRatios(uint8_t mask, uint8_t percent)
+{
+    const uint16_t ratio = wcMotorRatio(percent);
+    for (int m = 0; m < 4; m++) {
+        paramSetInt(motorSetRatio[m], (mask & (1u << m)) ? ratio : 0);
+    }
+}
+
+static void motorTestStop(const char *why)
+{
+    if (!motorTest.active) {
+        return;
+    }
+    // Disarm first: the power distribution turns the motors off in the next
+    // cycle, whatever the ratios are.
+    systemReleaseArm(ARM_SOURCE_WEB);
+    paramSetInt(motorSetEnable, 0);
+    motorTestSetRatios(0, 0);
+    motorTest.active = false;
+    ESP_LOGI(TAG, "motor test stopped: %s", why);
+}
+
+static wcMotorReply_t handleMotorTest(int idx, const wcMotorTest_t *req, uint32_t t)
+{
+    wcMotorReply_t rep = {0};
+    if (req->mask == 0) {
+        motorTestStop("stop request");   // every client may stop it
+        return rep;
+    }
+
+    const armSource_t owner = systemGetArmOwner();
+    const wcMotorTestInputs_t in = {
+        .enabled = motorTestAvailable,
+        .systemReady = systemReady(),
+        .busy = pilotToken != 0 ||
+                (owner != ARM_SOURCE_NONE && !(owner == ARM_SOURCE_WEB && motorTest.active)),
+    };
+    wcMotorTest_t applied;
+    rep.status = (uint8_t)wcMotorTestCheck(&in, req, CONFIG_WEBCTRL_MOTOR_TEST_MAX_PERCENT, &applied);
+    if (rep.status != WC_MOTOR_OK) {
+        return rep;
+    }
+    // Arm before setting the ratios: the arm is only granted if nobody else
+    // holds it, and with idle thrust 0 the motors stay still until then.
+    if (!motorTest.active && !systemRequestArm(ARM_SOURCE_WEB)) {
+        rep.status = WC_MOTOR_BUSY;
+        return rep;
+    }
+    motorTestSetRatios(applied.mask, applied.percent);
+    paramSetInt(motorSetEnable, 1);
+    motorTest.active = true;
+    motorTest.ownerFd = clients[idx].fd;
+    motorTest.mask = applied.mask;
+    motorTest.percent = applied.percent;
+    motorTest.startMs = t;
+    motorTest.durationMs = applied.durationMs;
+    ESP_LOGW(TAG, "motor test: motors 0x%x at %u %% for %u ms", applied.mask, applied.percent,
+             applied.durationMs);
+
+    rep.mask = applied.mask;
+    rep.percent = applied.percent;
+    rep.durationMs = applied.durationMs;
+    return rep;
+}
+
 static void emergencyStop(int killerIdx)
 {
     // Any connected browser may stop the drone, whoever flies it.
+    motorTestStop("KILL");
     systemForceDisarm();
     if (pilotToken != 0) {
         endPilotSession(true, WC_STOP_KILL, "KILL");
@@ -260,11 +371,6 @@ static void emergencyStop(int killerIdx)
         ESP_LOGW(TAG, "KILL from browser (fd %d)", clients[killerIdx].fd);
     }
     clients[killerIdx].armReleased = false;
-}
-
-static bool systemReady(void)
-{
-    return systemIsStarted() && sensorsAreCalibrated();
 }
 
 static void handleControl(int idx, const wcControl_t *cmd, uint32_t t)
@@ -305,6 +411,10 @@ static void handleControl(int idx, const wcControl_t *cmd, uint32_t t)
         c->armResult = WC_ARM_OTHER_PILOT;   // another browser flies
         return;
     }
+    if (motorTest.active) {
+        c->armResult = WC_ARM_MOTOR_TEST;
+        return;
+    }
 
     const armSource_t owner = systemGetArmOwner();
     const wcArmInputs_t in = {
@@ -325,18 +435,218 @@ static void handleControl(int idx, const wcControl_t *cmd, uint32_t t)
 }
 
 /* ------------------------------------------------------------------------ */
+/* Parameters and controller gains                                           */
+/* ------------------------------------------------------------------------ */
+
+static void sendBinary(int fd, uint8_t *buf, size_t len)
+{
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_BINARY,
+        .payload = buf,
+        .len = len,
+        .final = true,
+    };
+    if (len > 0) {
+        httpd_ws_send_frame_async(wsServer, fd, &frame);
+    }
+}
+
+static paramVarId_t paramByName(const char *full)
+{
+    const paramVarId_t invalid = {.id = 0xffffu, .ptr = 0xffffu};
+    char group[WC_PARAM_NAME_MAX + 1];
+    const char *dot = strchr(full, '.');
+    const size_t n = dot ? (size_t)(dot - full) : 0;
+    if (n == 0 || n >= sizeof(group)) {
+        return invalid;
+    }
+    memcpy(group, full, n);
+    group[n] = '\0';
+    char name[WC_PARAM_NAME_MAX + 1];
+    strlcpy(name, dot + 1, sizeof(name));
+    return paramGetVarId(group, name);
+}
+
+/* Changing gains: on the ground everyone, in flight only the web pilot. */
+static bool mayChangeGains(int idx)
+{
+    if (pilotToken != 0) {
+        return idx == pilotIdx;
+    }
+    return systemGetArmOwner() == ARM_SOURCE_NONE && !motorTest.active;
+}
+
+/* Saving and resetting only while nobody can fly: writing the flash stalls
+ * the flight task for a few milliseconds. */
+static bool mayStoreGains(void)
+{
+    return pilotToken == 0 && systemGetArmOwner() == ARM_SOURCE_NONE && !motorTest.active;
+}
+
+/* Once the controller is set up: read the defaults, apply stored gains. */
+static void gainsInit(void)
+{
+    paramVarId_t ids[WC_GAIN_COUNT];
+    float defaults[WC_GAIN_COUNT];
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        ids[i] = paramByName(wcGainNames[i]);
+        if (!PARAM_VARID_IS_VALID(ids[i])) {
+            ESP_LOGE(TAG, "gain %s not found: gains read only", wcGainNames[i]);
+            return;
+        }
+        defaults[i] = paramGetFloat(ids[i]);
+    }
+
+    float stored[WC_GAIN_COUNT];
+    bool valid[WC_GAIN_COUNT] = {false};
+    bool haveStored = false;
+    nvs_handle_t h;
+    if (nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t blob[WC_GAINS_BLOB_LEN];
+        size_t len = sizeof(blob);
+        haveStored = nvs_get_blob(h, WEBCTRL_NVS_GAINS, blob, &len) == ESP_OK &&
+                     wcDecodeGainsBlob(blob, len, stored, valid);
+        nvs_close(h);
+    }
+
+    int applied = 0;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    memcpy(gainIds, ids, sizeof(gainIds));
+    memcpy(gainDefaults, defaults, sizeof(gainDefaults));
+    for (int i = 0; haveStored && i < WC_GAIN_COUNT; i++) {
+        if (valid[i]) {
+            paramSetFloat(gainIds[i], stored[i]);
+            applied++;
+        }
+    }
+    gainsStored = applied > 0;
+    gainsReady = true;
+    xSemaphoreGive(lock);
+    if (applied > 0) {
+        ESP_LOGI(TAG, "%d controller gains loaded from flash", applied);
+    }
+}
+
+static esp_err_t gainsWriteFlash(const float *values, bool erase)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (erase) {
+        err = nvs_erase_key(h, WEBCTRL_NVS_GAINS);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            err = ESP_OK;
+        }
+    } else {
+        uint8_t blob[WC_GAINS_BLOB_LEN];
+        wcEncodeGainsBlob(values, blob, sizeof(blob));
+        err = nvs_set_blob(h, WEBCTRL_NVS_GAINS, blob, sizeof(blob));
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+/* SAVE stores the current gains (or erases the stored ones if all are the
+ * defaults); RESET restores the defaults and erases the stored ones. */
+static wcParamStatus_t gainsStore(bool reset)
+{
+    float values[WC_GAIN_COUNT];
+    bool allDefault = true;
+
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (!gainsReady || !mayStoreGains()) {
+        xSemaphoreGive(lock);
+        return WC_PARAM_BUSY;
+    }
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        if (reset) {
+            paramSetFloat(gainIds[i], gainDefaults[i]);
+        }
+        values[i] = paramGetFloat(gainIds[i]);
+        allDefault = allDefault && values[i] == gainDefaults[i];
+    }
+    xSemaphoreGive(lock);
+
+    const esp_err_t err = gainsWriteFlash(values, allDefault);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "storing the gains failed: %s", esp_err_to_name(err));
+        return WC_PARAM_FAILED;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    gainsStored = !allDefault;
+    xSemaphoreGive(lock);
+    if (reset) {
+        ESP_LOGI(TAG, "gains reset to the defaults");
+    } else {
+        ESP_LOGI(TAG, "gains stored (%s)", allDefault ? "all defaults" : "custom");
+    }
+    return WC_PARAM_OK;
+}
+
+/* Runs in the WebSocket server task; answers on the same connection. */
+static void handleParam(int fd, int idx, const wcParamReq_t *req)
+{
+    wcParamReply_t rep = {.op = req->op, .reqId = req->reqId, .status = WC_PARAM_OK, .dflt = NAN};
+
+    if (req->op == WC_PARAM_SAVE || req->op == WC_PARAM_RESET) {
+        rep.status = (uint8_t)gainsStore(req->op == WC_PARAM_RESET);
+    } else {
+        strlcpy(rep.name, req->name, sizeof(rep.name));
+        const paramVarId_t id = paramByName(req->name);
+        const int gain = wcGainIndex(req->name);
+        xSemaphoreTake(lock, portMAX_DELAY);
+        if (!PARAM_VARID_IS_VALID(id)) {
+            rep.status = WC_PARAM_UNKNOWN;
+        } else {
+            if (req->op == WC_PARAM_WRITE) {
+                if (gain < 0) {
+                    rep.status = WC_PARAM_DENIED;
+                } else if (!gainsReady || !mayChangeGains(idx)) {
+                    rep.status = WC_PARAM_BUSY;
+                } else if (!wcGainValueValid(req->value)) {
+                    rep.status = WC_PARAM_INVALID;
+                } else {
+                    paramSetFloat(id, req->value);
+                    ESP_LOGI(TAG, "%s = %.4g", req->name, (double)req->value);
+                }
+            }
+            rep.value = paramGetFloat(id);
+            if (gain >= 0 && gainsReady) {
+                rep.dflt = gainDefaults[gain];
+                rep.flags |= WC_PARAMF_WRITABLE;
+            }
+        }
+        xSemaphoreGive(lock);
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (gainsStored) {
+        rep.flags |= WC_PARAMF_STORED;
+    }
+    xSemaphoreGive(lock);
+
+    uint8_t buf[WC_PARAM_MAX_LEN];
+    sendBinary(fd, buf, wcEncodeParamReply(&rep, buf, sizeof(buf)));
+}
+
+/* ------------------------------------------------------------------------ */
 /* WebSocket server (port 81)                                                */
 /* ------------------------------------------------------------------------ */
 
 static void sendInfo(int fd, bool resumed)
 {
     const esp_app_desc_t *app = esp_app_get_description();
-    char json[400];
+    char json[512];
     int n = snprintf(json, sizeof(json),
                      "{\"t\":\"info\",\"proto\":%d,\"fw\":\"%s\",\"device\":\"%s\",\"resumed\":%s,"
                      "\"maxAngle\":%d,\"maxYawRate\":%d,\"telemetryHz\":%d,"
                      "\"failsafe\":{\"ok\":%d,\"hold\":%d,\"descend\":%d,\"off\":%d,\"stale\":%d},"
-                     "\"battery\":{\"land\":%d,\"arm\":%d,\"landTime\":%d},\"trimMax\":%d}",
+                     "\"battery\":{\"land\":%d,\"arm\":%d,\"landTime\":%d},\"trimMax\":%d,"
+                     "\"fastHz\":%d,\"motorTest\":{\"maxPercent\":%d,\"maxMs\":%d}}",
                      WC_PROTOCOL_VERSION, app->version, platformConfigGetDeviceTypeName(),
                      resumed ? "true" : "false",
                      CONFIG_WEBCTRL_MAX_ANGLE_DEG, CONFIG_WEBCTRL_MAX_YAW_RATE_DEG,
@@ -344,7 +654,9 @@ static void sendInfo(int fd, bool resumed)
                      CONFIG_WEBCTRL_OK_MS, CONFIG_WEBCTRL_HOLD_MS, CONFIG_WEBCTRL_DESCEND_MS,
                      CONFIG_WEBCTRL_OFF_MS, CONFIG_WEBCTRL_STALE_MS,
                      CONFIG_WEBCTRL_BAT_LAND_MV, CONFIG_WEBCTRL_BAT_ARM_MIN_MV,
-                     CONFIG_WEBCTRL_BAT_LAND_TIME_MS, WC_TRIM_MAX);
+                     CONFIG_WEBCTRL_BAT_LAND_TIME_MS, WC_TRIM_MAX,
+                     1000 / WC_FAST_PERIOD_MS,
+                     motorTestAvailable ? CONFIG_WEBCTRL_MOTOR_TEST_MAX_PERCENT : 0, WC_MOTOR_TEST_MAX_MS);
     if (n <= 0 || n >= (int)sizeof(json)) {
         return;
     }
@@ -357,10 +669,22 @@ static void sendInfo(int fd, bool resumed)
     httpd_ws_send_frame_async(wsServer, fd, &frame);
 }
 
+static void updateFastWanted(void)
+{
+    fastWanted = false;
+    for (int i = 0; i < WEBCTRL_MAX_CLIENTS; i++) {
+        fastWanted = fastWanted || (clients[i].fd >= 0 && clients[i].fast);
+    }
+}
+
 static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
 {
     bool sendInfoFrame = false;
     bool resumed = false;
+    bool paramRequest = false;
+    wcParamReq_t param;
+    bool motorReplyFrame = false;
+    wcMotorReply_t motorReply;
 
     xSemaphoreTake(lock, portMAX_DELAY);
     int idx = findClient(fd);
@@ -397,12 +721,34 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
                 trimChangedMs = t;
                 ESP_LOGI(TAG, "trim roll %.1f, pitch %.1f deg", tr.roll / 10.0, tr.pitch / 10.0);
             }
+        } else if (buf[0] == WC_MSG_STREAM) {
+            uint8_t flags;
+            if (wcDecodeStream(buf, len, &flags)) {
+                clients[idx].fast = (flags & WC_STREAM_FAST) != 0;
+                clients[idx].fastPending = false;
+                updateFastWanted();
+            }
+        } else if (buf[0] == WC_MSG_PARAM) {
+            paramRequest = wcDecodeParamReq(buf, len, &param);
+        } else if (buf[0] == WC_MSG_MOTOR_TEST) {
+            wcMotorTest_t req;
+            if (wcDecodeMotorTest(buf, len, &req)) {
+                motorReply = handleMotorTest(idx, &req, t);
+                motorReplyFrame = true;
+            }
         }
     }
     xSemaphoreGive(lock);
 
     if (sendInfoFrame) {
         sendInfo(fd, resumed);
+    }
+    if (paramRequest) {
+        handleParam(fd, idx, &param);
+    }
+    if (motorReplyFrame) {
+        uint8_t out[WC_MOTOR_REPLY_LEN];
+        sendBinary(fd, out, wcEncodeMotorReply(&motorReply, out, sizeof(out)));
     }
 }
 
@@ -464,7 +810,12 @@ static void wsClose(httpd_handle_t hd, int fd)
             pilotLink.connected = false;
             ESP_LOGW(TAG, "pilot connection closed (fd %d)", fd);
         }
+        if (motorTest.active && motorTest.ownerFd == fd) {
+            motorTestStop("ground station left");
+        }
         clients[idx].fd = -1;
+        clients[idx].fast = false;
+        updateFastWanted();
     }
     xSemaphoreGive(lock);
     close(fd);
@@ -485,31 +836,35 @@ static void telemetryWork(void *arg)
 {
     for (int i = 0; i < WEBCTRL_MAX_CLIENTS; i++) {
         uint8_t buf[WC_TELEMETRY_LEN];
+        uint8_t fast[WC_FAST_MAX_LEN];
+        size_t fastLen = 0;
         int fd;
 
         xSemaphoreTake(lock, portMAX_DELAY);
         fd = clients[i].fd;
-        bool pending = fd >= 0 && clients[i].txPending;
+        const bool pending = fd >= 0 && clients[i].txPending;
         if (pending) {
             memcpy(buf, clients[i].tx, sizeof(buf));
             clients[i].txPending = false;
         }
+        if (fd >= 0 && clients[i].fastPending) {
+            fastLen = fastTxLen;
+            memcpy(fast, fastTx, fastLen);
+            clients[i].fastPending = false;
+        }
         xSemaphoreGive(lock);
 
-        if (!pending) {
-            continue;
+        if (pending) {
+            if (socketWritable(fd)) {
+                sendBinary(fd, buf, sizeof(buf));
+            } else {
+                telemetrySkipped++;
+            }
         }
-        if (!socketWritable(fd)) {
-            telemetrySkipped++;
-            continue;
+        // FAST frames are a nice-to-have: they never wait for a busy socket.
+        if (fastLen > 0 && socketWritable(fd)) {
+            sendBinary(fd, fast, fastLen);
         }
-        httpd_ws_frame_t frame = {
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = buf,
-            .len = sizeof(buf),
-            .final = true,
-        };
-        httpd_ws_send_frame_async(wsServer, fd, &frame);
     }
     telemetryQueued = false;
 }
@@ -648,17 +1003,6 @@ static void onWifiEvent(void *arg, esp_event_base_t base, int32_t id, void *data
 /* Supervisor task                                                           */
 /* ------------------------------------------------------------------------ */
 
-static int16_t centiDeg(float deg)
-{
-    float v = deg * 100.0f;
-    if (v > 32767.0f) {
-        v = 32767.0f;
-    } else if (v < -32767.0f) {
-        v = -32767.0f;
-    }
-    return (int16_t)v;
-}
-
 /* lock held */
 static void buildTelemetry(uint32_t now)
 {
@@ -670,10 +1014,11 @@ static void buildTelemetry(uint32_t now)
     const float vbat = batState.volts;   // filtered
     // "Too low to arm" only on the ground: under load the voltage sags anyway.
     const uint8_t state2 = (uint8_t)((session && batState.landing ? WC_STATE2_BAT_LANDING : 0) |
-                                     (!session && wcBatteryArmBlocked(&batState, &cfg) ? WC_STATE2_BAT_NO_ARM : 0));
-    const int16_t roll = centiDeg(logFloatOrZero(logRoll));
-    const int16_t pitch = centiDeg(logFloatOrZero(logPitch));
-    const int16_t yaw = centiDeg(logFloatOrZero(logYaw));
+                                     (!session && wcBatteryArmBlocked(&batState, &cfg) ? WC_STATE2_BAT_NO_ARM : 0) |
+                                     (motorTest.active ? WC_STATE2_MOTOR_TEST : 0));
+    const int16_t roll = wcCentiDeg(logFloatOrZero(logRoll));
+    const int16_t pitch = wcCentiDeg(logFloatOrZero(logPitch));
+    const int16_t yaw = wcCentiDeg(logFloatOrZero(logYaw));
 
     for (int i = 0; i < WEBCTRL_MAX_CLIENTS; i++) {
         wcClient_t *c = &clients[i];
@@ -790,6 +1135,14 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
         }
     }
 
+    if (motorTest.active) {
+        if (now - motorTest.startMs >= motorTest.durationMs) {
+            motorTestStop("time is up");
+        } else if (systemGetArmOwner() != ARM_SOURCE_WEB) {
+            motorTestStop("arm taken away");
+        }
+    }
+
     if (now - *rateWindowStart >= 1000) {
         *rateWindowStart = now;
         for (int i = 0; i < WEBCTRL_MAX_CLIENTS; i++) {
@@ -799,6 +1152,77 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
     }
 
     xSemaphoreGive(lock);
+}
+
+/* Every 10 ms while a client wants FAST samples. True when a frame is complete. */
+static bool sampleFast(uint32_t now)
+{
+    if (!fastWanted) {
+        fastFrame.count = 0;
+        return false;
+    }
+    if (fastFrame.count == 0) {
+        fastFrame.t0Ms = now;
+        fastFrame.seq = fastSeq;
+    }
+    wcFastSample_t *s = &fastFrame.s[fastFrame.count];
+    s->rollCdeg = wcCentiDeg(logFloatOrZero(logRoll));
+    s->pitchCdeg = wcCentiDeg(logFloatOrZero(logPitch));
+    s->yawCdeg = wcCentiDeg(logFloatOrZero(logYaw));
+    s->rollSpCdeg = wcCentiDeg(logFloatOrZero(logRollSp));
+    s->pitchSpCdeg = wcCentiDeg(logFloatOrZero(logPitchSp));
+    // Rates as the rate controller compares them (controller_pid.c): pitch is -gyro.y.
+    s->gyroDdps[0] = wcDeciDeg(logFloatOrZero(logGyro[0]));
+    s->gyroDdps[1] = wcDeciDeg(-logFloatOrZero(logGyro[1]));
+    s->gyroDdps[2] = wcDeciDeg(logFloatOrZero(logGyro[2]));
+    for (int k = 0; k < 3; k++) {
+        s->rateSpDdps[k] = wcDeciDeg(logFloatOrZero(logRateSp[k]));
+    }
+    for (int m = 0; m < 4; m++) {
+        s->motor[m] = wcU16Sat(logFloatOrZero(logMotor[m]));
+    }
+    s->thrust = wcU16Sat(logFloatOrZero(logThrust));
+    fastSeq++;
+    if (++fastFrame.count < WC_FAST_SAMPLES) {
+        return false;
+    }
+
+    fastFrame.periodMs = WC_FAST_PERIOD_MS;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    fastTxLen = wcEncodeFast(&fastFrame, fastTx, sizeof(fastTx));
+    for (int i = 0; i < WEBCTRL_MAX_CLIENTS; i++) {
+        clients[i].fastPending = clients[i].fd >= 0 && clients[i].fast && clients[i].helloSeen;
+    }
+    xSemaphoreGive(lock);
+    fastFrame.count = 0;
+    return true;
+}
+
+static void lookUpVariables(void)
+{
+    logRoll = logGetVarId("stabilizer", "roll");
+    logPitch = logGetVarId("stabilizer", "pitch");
+    logYaw = logGetVarId("stabilizer", "yaw");
+    logThrust = logGetVarId("stabilizer", "thrust");
+    logRollSp = logGetVarId("controller", "roll");
+    logPitchSp = logGetVarId("controller", "pitch");
+    logRateSp[0] = logGetVarId("controller", "rollRate");
+    logRateSp[1] = logGetVarId("controller", "pitchRate");
+    logRateSp[2] = logGetVarId("controller", "yawRate");
+    logGyro[0] = logGetVarId("gyro", "x");
+    logGyro[1] = logGetVarId("gyro", "y");
+    logGyro[2] = logGetVarId("gyro", "z");
+    static const char *const motorNames[4] = {"m1", "m2", "m3", "m4"};
+    motorSetEnable = paramByName("motorPowerSet.enable");
+    bool motorsOk = PARAM_VARID_IS_VALID(motorSetEnable);
+    for (int m = 0; m < 4; m++) {
+        logMotor[m] = logGetVarId("motor", (char *)motorNames[m]);
+        char name[24];
+        snprintf(name, sizeof(name), "motorPowerSet.%s", motorNames[m]);
+        motorSetRatio[m] = paramByName(name);
+        motorsOk = motorsOk && PARAM_VARID_IS_VALID(motorSetRatio[m]);
+    }
+    motorTestAvailable = motorsOk && CONFIG_WEBCTRL_MOTOR_TEST_MAX_PERCENT > 0;
 }
 
 static void trimLoad(void)
@@ -887,9 +1311,7 @@ static void webctrlTask(void *arg)
         return;
     }
 
-    logRoll = logGetVarId("stabilizer", "roll");
-    logPitch = logGetVarId("stabilizer", "pitch");
-    logYaw = logGetVarId("stabilizer", "yaw");
+    lookUpVariables();
     trimLoad();
 
     setupCaptivePortal();
@@ -904,6 +1326,7 @@ static void webctrlTask(void *arg)
     uint32_t lastTelemetry = 0;
     uint32_t rateWindowStart = nowMs();
     uint32_t last = nowMs();
+    bool gainsTried = false;
     TickType_t wake = xTaskGetTickCount();
 
     while (true) {
@@ -914,12 +1337,20 @@ static void webctrlTask(void *arg)
 
         supervise(now, dt, &rateWindowStart);
         trimSaveWhenIdle(now);
+        if (!gainsTried && systemIsStarted()) {
+            gainsTried = true;
+            gainsInit();   // the controller is set up by now
+        }
 
+        bool queue = sampleFast(now);
         if (now - lastTelemetry >= telemetryPeriodMs && !telemetryQueued) {
             lastTelemetry = now;
             xSemaphoreTake(lock, portMAX_DELAY);
             buildTelemetry(now);
             xSemaphoreGive(lock);
+            queue = true;
+        }
+        if (queue && !telemetryQueued) {
             telemetryQueued = true;
             if (httpd_queue_work(wsServer, telemetryWork, NULL) != ESP_OK) {
                 telemetryQueued = false;

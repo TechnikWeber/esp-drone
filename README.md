@@ -25,6 +25,8 @@ page opens by itself (captive portal). No app, no account, no internet.
   </tr>
 </table>
 
+<img src="docs/images/e1-mini.jpg" align="right" width="300" alt="E1 Mini quadcopter kit with a plug-in ESP32 DevKit">
+
 What this fork adds to [espressif/esp-drone](https://github.com/espressif/esp-drone)
 (based on `master@9d5a4f8` of 26 Oct 2026; changes since 25 Oct 2026 by Philipp
 Weber, [TechnikWeber](https://github.com/TechnikWeber)):
@@ -37,8 +39,9 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
   page speaks English and German. See [docs/webcontrol.md](docs/webcontrol.md).
 - **Battery protection and trim** for web flights: forced landing below 3.0 V,
   no arming below 3.4 V, roll and pitch trim stored on the drone.
-- **New board: CHERGLOW E1 Mini**, a kit with a plug-in ESP32 DevKit and an
-  MPU6500 on SPI, sold among others as "ESP32 Drone Kit". Pins and controller
+- **New board: E1 Mini** (pictured), a mini quadcopter kit with a plug-in
+  ESP32 DevKit and an MPU6500 on SPI. Sellers use many brand names; "ESP32
+  Drone" and "E1" or "E1 Mini" are in almost every listing. Pins and controller
   gains checked against the vendor firmware (CF-Drone). See
   [docs/e1-mini.md](docs/e1-mini.md).
 - **Arming by exactly one source:** web pilot, app/cfclient/ESP-NOW (throttle to

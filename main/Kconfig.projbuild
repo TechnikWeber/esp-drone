@@ -17,7 +17,7 @@ menu "ESPDrone Config"
             bool "esp-drone with ESP32-S2/ESP32-S3 onboard"
 
         config TARGET_E1_MINI
-            bool "CHERGLOW E1 Mini (ESP32 DevKit 30 pin, MPU6500 on SPI)"
+            bool "E1 Mini / ESP32 Drone kit (ESP32 DevKit 30 pin, MPU6500 on SPI)"
             depends on IDF_TARGET_ESP32
             help
                 Mini quadcopter kit: a plain ESP32 DevKit V1 (30 pin) plugged onto

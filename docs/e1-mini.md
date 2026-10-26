@@ -1,8 +1,12 @@
-# ESP-Drone on the CHERGLOW E1 Mini
+# ESP-Drone on the E1 Mini
 
-This firmware variant runs on the **CHERGLOW (琛光) E1 Mini** kit (open hardware
-project: <https://oshwhub.com/songge8/project_qqqyfdkm>), which is sold among
-others as "ESP32 Drone Kit". It ships with the Arduino firmware *CF-Drone*
+<img src="images/e1-mini.jpg" width="420" alt="E1 Mini quadcopter kit with a plug-in ESP32 DevKit">
+
+This firmware variant runs on the **E1 Mini**, a mini quadcopter kit with a
+plug-in ESP32 DevKit (open hardware project:
+<https://oshwhub.com/songge8/project_qqqyfdkm>). Sellers use many brand names;
+"ESP32 Drone" and "E1" or "E1 Mini" are in almost every listing. It ships with
+the Arduino firmware *CF-Drone*
 ([songge8/CF-Drone](https://github.com/songge8/CF-Drone)), which some sellers
 rename to "XW-Drone". This guide describes how ESP-Drone was adapted to the
 hardware, how to flash it and how to test on the bench before the first flight.

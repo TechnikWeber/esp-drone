@@ -50,7 +50,7 @@ static platformConfig_t configs[] = {
 #ifdef SENSOR_INCLUDED_MPU6500_SPI
     {
         .deviceType = "E1MN",
-        .deviceTypeName = "CHERGLOW E1 Mini",
+        .deviceTypeName = "ESP32 Drone E1 Mini",   /* at most 19 characters */
         .sensorImplementation = SensorImplementation_mpu6500_spi,
         .physicalLayoutAntennasAreClose = false,
         .motorMap = motorMapDefaultBrushed,

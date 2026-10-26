@@ -46,9 +46,12 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
   no arming below 3.4 V, roll and pitch trim stored on the drone.
 - **New board: E1 Mini** (pictured), a mini quadcopter kit with a plug-in
   ESP32 DevKit and an MPU6500 on SPI. Sellers use many brand names; "ESP32
-  Drone" and "E1" or "E1 Mini" are in almost every listing. Pins and controller
-  gains checked against the vendor firmware (CF-Drone). See
-  [docs/e1-mini.md](docs/e1-mini.md).
+  Drone" and "E1" or "E1 Mini" are in almost every listing. Its open hardware
+  design, the origin of these kits, is the
+  [E1 Mini project on OSHWHub](https://oshwhub.com/songge8/project_qqqyfdkm) by
+  songge8 (CC BY-NC-SA 4.0; schematic and PCB in [hardware/E1_Mini](hardware/E1_Mini/)).
+  Pins and controller gains checked against its
+  schematic and the vendor firmware (CF-Drone). See [docs/e1-mini.md](docs/e1-mini.md).
 - **Arming by exactly one source:** web pilot, app/cfclient/ESP-NOW (throttle to
   zero once) or `system.forceArm`. Every connected phone can trigger STOP.
 - Partition table with two app slots and a core dump partition.
@@ -78,7 +81,9 @@ and the SPI interrupt handler is not in IRAM; a test has to show whether the hea
 is enough for web control.
 
 License unchanged: **GPL-3.0** (see [LICENSE](LICENSE)). Copyright of the
-original parts: Espressif Systems and Bitcraze AB.
+original parts: Espressif Systems and Bitcraze AB. Exception: the E1 Mini
+schematic and PCB in [hardware/E1_Mini](hardware/E1_Mini/) are by songge8 under
+CC BY-NC-SA 4.0 (non-commercial).
 
 ```bash
 . ~/esp/esp-idf-v5.5.6/export.sh

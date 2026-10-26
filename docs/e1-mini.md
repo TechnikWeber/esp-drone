@@ -30,8 +30,19 @@ hardware, how to flash it and how to test on the bench before the first flight.
 | Expansion | I2C SDA 21 / SCL 22, PMW3901 CS GPIO33, VL53L1X XSHUT GPIO32 | CF-Drone |
 | Buzzer | none | |
 
-The pin numbers are facts taken from the vendor's files; no CF-Drone code was
-copied.
+The pin numbers are facts taken from the vendor's files and match the
+schematic of the open hardware project (version V1.3, July 2026; screenshots
+in [hardware/E1_Mini](../hardware/E1_Mini/)); no CF-Drone
+code was copied. More from the schematic:
+
+- The battery feeds a 3.3 V low-dropout regulator (ME6118A33) that supplies the
+  DevKit through its 3V3 pin. USB 5 V only reaches the DevKit's VIN pin: there
+  is **no charging circuit**.
+- Each motor is switched by an AO3416 MOSFET on the low side, with a B5819W
+  flyback diode and an LED that lights while the motor runs.
+- Unused: four 3-pin headers reserved for brushless ESCs, a receiver header
+  (ELRS/CRSF/SBUS on GPIO4) and two expansion headers (SPI with CS GPIO33,
+  I2C plus GPIO32).
 
 ### IMU orientation
 
@@ -68,8 +79,9 @@ The kit usually ships without a battery. The seller's parts list names a
 - **Connector PH2.0, 2 pins** (JST PH, 2.0 mm pitch), as in the parts list.
   Molex 51005 and MX2.0 plugs look similar but do not fit.
 - **Check the polarity** before plugging in the first pack (multimeter or the
-  marking next to the socket): the parts list shows no reverse polarity
-  protection, and battery vendors do not all wire PH2.0 the same way.
+  marking next to the socket): according to the schematic, pin 1 of the socket
+  is + (VBAT). There is no reverse polarity protection, and battery vendors do
+  not all wire PH2.0 the same way.
 - **Charge** with the USB charger of the kit or another 1S LiPo charger. The
   drone does not charge: its USB port only powers the ESP32 for flashing.
 - A piece of tape over the solder points in the roof of the bay protects the

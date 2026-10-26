@@ -25,12 +25,23 @@
 #include <stdbool.h>
 
 #include "motors.h"
+#include "sdkconfig.h"
 
 #define PLATFORM_DEVICE_TYPE_STRING_MAX_LEN (32 + 1)
 #define PLATFORM_DEVICE_TYPE_MAX_LEN (4 + 1)
+
+// Exactly one IMU driver is compiled in, selected by menuconfig (IMU_TYPE).
+#ifdef CONFIG_IMU_MPU6500_SPI
+#define SENSOR_INCLUDED_MPU6500_SPI
+#else
 #define SENSOR_INCLUDED_MPU6050_HMC5883L_MS5611
+#endif
 
 typedef enum {
+#ifdef SENSOR_INCLUDED_MPU6500_SPI
+    SensorImplementation_mpu6500_spi,
+#endif
+
 #ifdef SENSOR_INCLUDED_BMI088_BMP388
     SensorImplementation_bmi088_bmp388,
 #endif

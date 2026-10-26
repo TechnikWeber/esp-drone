@@ -56,6 +56,10 @@
 #include "sensors_mpu6050_hm5883L_ms5611.h"
 #endif
 
+#ifdef SENSOR_INCLUDED_MPU6500_SPI
+#include "sensors_mpu6500_spi.h"
+#endif
+
 typedef struct {
   SensorImplementation_t implements;
   void (*init)(void);
@@ -78,6 +82,23 @@ static void nullFunction(void) {}
 #pragma GCC diagnostic pop
 
 static const sensorsImplementation_t sensorImplementations[SensorImplementation_COUNT] = {
+#ifdef SENSOR_INCLUDED_MPU6500_SPI
+  {
+    .implements = SensorImplementation_mpu6500_spi,
+    .init = sensorsMpu6500SpiInit,
+    .test = sensorsMpu6500SpiTest,
+    .areCalibrated = sensorsMpu6500SpiAreCalibrated,
+    .manufacturingTest = sensorsMpu6500SpiManufacturingTest,
+    .acquire = sensorsMpu6500SpiAcquire,
+    .waitDataReady = sensorsMpu6500SpiWaitDataReady,
+    .readGyro = sensorsMpu6500SpiReadGyro,
+    .readAcc = sensorsMpu6500SpiReadAcc,
+    .readMag = sensorsMpu6500SpiReadMag,
+    .readBaro = sensorsMpu6500SpiReadBaro,
+    .setAccMode = sensorsMpu6500SpiSetAccMode,
+    .dataAvailableCallback = nullFunction,
+  },
+#endif
 #ifdef SENSOR_INCLUDED_BMI088_BMP388
   {
     .implements = SensorImplementation_bmi088_bmp388,

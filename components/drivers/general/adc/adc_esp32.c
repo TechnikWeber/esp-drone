@@ -36,10 +36,20 @@ static bool isInit;
 static adc_oneshot_unit_handle_t adc_handle;
 static adc_cali_handle_t adc_cali_handle;
 static bool calibration_enabled;
-#ifdef CONFIG_IDF_TARGET_ESP32
-static const adc_channel_t channel = ADC_CHANNEL_7; //GPIO35 if ADC1
+#if defined(CONFIG_IDF_TARGET_ESP32)
+// ESP32 ADC1: GPIO36..39 = channel 0..3, GPIO32..35 = channel 4..7
+#if CONFIG_ADC1_PIN >= 36
+static const adc_channel_t channel = (adc_channel_t)(CONFIG_ADC1_PIN - 36);
+#elif CONFIG_ADC1_PIN >= 32
+static const adc_channel_t channel = (adc_channel_t)(CONFIG_ADC1_PIN - 32 + 4);
 #else
-static const adc_channel_t channel = ADC_CHANNEL_1;     // GPIO2 if ADC1
+#error "CONFIG_ADC1_PIN must be an ADC1 pin (GPIO32..39) on the ESP32"
+#endif
+#elif (defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)) && CONFIG_ADC1_PIN >= 1
+// ESP32-S2/S3 ADC1: GPIO1..10 = channel 0..9
+static const adc_channel_t channel = (adc_channel_t)(CONFIG_ADC1_PIN - 1);
+#else
+static const adc_channel_t channel = ADC_CHANNEL_1;     // portable profile: ADC not used
 #endif
 
 static const adc_bitwidth_t width = ADC_BITWIDTH_DEFAULT;

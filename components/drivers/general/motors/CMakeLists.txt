@@ -1,3 +1,3 @@
 idf_component_register(SRCS "motors_def_cf2.c" "motors.c"
                        INCLUDE_DIRS "." "include"
-                       REQUIRES crazyflie platform config esp_driver_ledc)
+                       REQUIRES crazyflie platform config esp_driver_ledc esp_driver_gpio)

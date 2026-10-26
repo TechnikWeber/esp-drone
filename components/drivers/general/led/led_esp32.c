@@ -28,7 +28,8 @@
 #include "led.h"
 #include "stm32_legacy.h"
 
-static unsigned int led_pin[] = {
+// A negative pin number means "not connected" (menuconfig LED_PIN_* = -1)
+static const int led_pin[] = {
     [LED_BLUE] = LED_GPIO_BLUE,
     [LED_RED]   = LED_GPIO_RED,
     [LED_GREEN] = LED_GPIO_GREEN,
@@ -51,6 +52,9 @@ void ledInit()
     }
 
     for (i = 0; i < LED_NUM; i++) {
+        if (led_pin[i] < 0) {
+            continue;
+        }
         gpio_config_t io_conf = {
             //bit mask of the pins that you want to set,e.g.GPIO18/19
             .pin_bit_mask = (1ULL << led_pin[i]),
@@ -105,7 +109,7 @@ void ledSetAll(void)
 }
 void ledSet(led_t led, bool value)
 {
-    if (led > LED_NUM || led == LED_NUM) {
+    if (led >= LED_NUM || led_pin[led] < 0) {
         return;
     }
 

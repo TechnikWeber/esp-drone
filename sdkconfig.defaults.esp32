@@ -1,0 +1,9 @@
+# ESP32 (E1 Mini): full clock, dual core. Flight tasks run on core 1
+# (FLIGHT_TASK_CORE), Wi-Fi, lwIP and the web server on core 0.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# The 3.3 V rail of the E1 Mini dips when the motors spin up. A brownout
+# reset in flight would drop the drone, so the reset is disabled (the vendor
+# firmware does the same).
+CONFIG_ESP_BROWNOUT_DET=n

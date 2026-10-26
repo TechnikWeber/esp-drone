@@ -20,6 +20,8 @@ list(APPEND EXTRA_COMPONENT_DIRS
      "${CMAKE_CURRENT_LIST_DIR}/components/drivers/i2c_devices/vl53l0"
      "${CMAKE_CURRENT_LIST_DIR}/components/drivers/i2c_devices/vl53l1"
      "${CMAKE_CURRENT_LIST_DIR}/components/drivers/spi_devices/pmw3901"
+     "${CMAKE_CURRENT_LIST_DIR}/components/drivers/spi_devices/mpu6500"
+     "${CMAKE_CURRENT_LIST_DIR}/components/drivers/spi_bus"
      "${CMAKE_CURRENT_LIST_DIR}/components/lib/dsp_lib")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

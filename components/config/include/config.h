@@ -58,6 +58,10 @@
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32S3)
 #error "ESP32_S2_DRONE_V1_2 hardware requires ESP32-S2 or ESP32-S3"
 #endif
+#elif defined(CONFIG_TARGET_E1_MINI)
+#ifndef CONFIG_IDF_TARGET_ESP32
+#error "E1 Mini hardware with ESP32 (DevKit V1, 30 pin) onboard"
+#endif
 #endif
 
 #ifdef STM32F4XX 
@@ -78,6 +82,17 @@
 
 //#define DEBUG_UDP
 //#define DEBUG_EP2
+
+// CPU core of the flight critical tasks (sensor sampling, stabilizer). On
+// dual-core chips Wi-Fi, lwIP and the web server run on the other core, so
+// network load cannot delay the control loop.
+#if CONFIG_FREERTOS_UNICORE
+#define FLIGHT_TASK_CORE        0
+#define NETWORK_TASK_CORE       0
+#else
+#define FLIGHT_TASK_CORE        1
+#define NETWORK_TASK_CORE       0
+#endif
 
 // Task priorities. Higher number higher priority
 // system state tasks

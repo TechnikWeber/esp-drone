@@ -31,6 +31,7 @@
 #include "freertos/task.h"
 
 #include "stm32_legacy.h"
+#include "driver/gpio.h"
 #include "motors.h"
 #include "pm_esplane.h"
 #include "log.h"
@@ -111,7 +112,7 @@ static bool pwmTimerInit(void)
      */
     ledc_timer_config_t ledc_timer = {
         .duty_resolution = MOTORS_PWM_BITS, // resolution of PWM duty
-        .freq_hz = 15000,					// frequency of PWM signal
+        .freq_hz = MOTORS_PWM_FREQ_HZ,      // frequency of PWM signal
         .speed_mode = LEDC_LOW_SPEED_MODE, // timer mode
         .timer_num = LEDC_TIMER_0,			// timer index
         .clk_cfg = LEDC_AUTO_CLK,
@@ -127,6 +128,28 @@ static bool pwmTimerInit(void)
 }
 
 /* Public functions */
+
+void motorsPinsSafeOff(void)
+{
+#ifdef CONFIG_TARGET_PORTABLE_SAFE
+    return;   // no board pin map: leave every GPIO alone
+#endif
+    const int pins[NBR_OF_MOTORS] = {MOTOR1_GPIO, MOTOR2_GPIO, MOTOR3_GPIO, MOTOR4_GPIO};
+
+    for (int i = 0; i < NBR_OF_MOTORS; i++) {
+        gpio_set_level(pins[i], 0);
+        gpio_config_t io_conf = {
+            .pin_bit_mask = 1ULL << pins[i],
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_ENABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&io_conf);
+        gpio_set_level(pins[i], 0);
+    }
+}
+
 
 //Initialization. Will set all motors ratio to 0%
 bool motorsInit(const MotorPerifDef **motorMapSelect)
@@ -289,7 +312,7 @@ int motorsGetRatio(uint32_t id)
 
 void motorsBeep(int id, bool enable, uint16_t frequency, uint16_t ratio)
 {
-    uint32_t freq_hz = 15000;
+    uint32_t freq_hz = MOTORS_PWM_FREQ_HZ;
     if (!isInit || !isHealthy || id < 0 || id >= NBR_OF_MOTORS ||
         (enable && frequency == 0)) {
         return;

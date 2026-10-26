@@ -31,7 +31,11 @@
 #error
 #endif
 
+#ifdef CONFIG_TARGET_E1_MINI
+#define DEFAULT_PLATFORM_STRING "0;E1MN"
+#else
 #define DEFAULT_PLATFORM_STRING "0;EP20"
+#endif
 
 //     //TODO:
 // #ifndef UNIT_TEST_MODE

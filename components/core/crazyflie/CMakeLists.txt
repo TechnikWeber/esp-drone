@@ -20,6 +20,14 @@ elseif(CONFIG_TRANSPORT_REMOTE_WIFI)
   list(APPEND crazyflie_transport_sources "./hal/src/wifilink.c")
 endif()
 
+# Exactly one IMU driver is built, selected in menuconfig (sensors config > IMU)
+set(crazyflie_imu_sources)
+if(CONFIG_IMU_MPU6500_SPI)
+  list(APPEND crazyflie_imu_sources "./hal/src/sensors_mpu6500_spi.c")
+else()
+  list(APPEND crazyflie_imu_sources "./hal/src/sensors_mpu6050_hm5883L_ms5611.c")
+endif()
+
 if(CONFIG_ESPNOW_CONTROL)
   list(APPEND crazyflie_transport_sources "./hal/src/espnow_ctrl.c")
 endif()
@@ -28,7 +36,7 @@ idf_component_register(SRCS "./hal/src/buzzer.c"
                 "./hal/src/freeRTOSdebug.c" 
                 "./hal/src/ledseq.c" 
                 "./hal/src/pm_esplane.c" 
-                "./hal/src/sensors_mpu6050_hm5883L_ms5611.c" 
+                ${crazyflie_imu_sources}
                 "./hal/src/sensors.c" 
                 "./hal/src/transport.c"
                 "./hal/src/usec_time.c" 
@@ -95,7 +103,7 @@ idf_component_register(SRCS "./hal/src/buzzer.c"
                 "./utils/src/version.c"
                 "./utils/src/rateSupervisor.c"
                 INCLUDE_DIRS "./hal/interface" "./modules/interface" "./utils/interface"
-                REQUIRES i2c_bus deck mpu6050 ms5611 hmc5883l pmw3901 vl53l1 vl53l0 platform config led eeprom dsp_lib motors adc esp_timer esp_driver_gpio ${crazyflie_transport_requires})
+                REQUIRES i2c_bus deck mpu6050 mpu6500 ms5611 hmc5883l pmw3901 vl53l1 vl53l0 platform config led eeprom dsp_lib motors adc esp_timer esp_driver_gpio esp_driver_gptimer ${crazyflie_transport_requires})
 
 idf_component_get_property( FREERTOS_ORIG_INCLUDE_PATH freertos ORIG_INCLUDE_PATH)
 target_include_directories(${COMPONENT_TARGET} PUBLIC

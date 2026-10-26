@@ -212,3 +212,11 @@
  * @param PRIORITY The task priority
  */
 #define STATIC_MEM_TASK_CREATE(NAME, FUNCTION, TASK_NAME, PARAMETERS, PRIORITY) xTaskCreateStatic((FUNCTION), (TASK_NAME), osSys_ ## NAME ## StackDepth, (PARAMETERS), (PRIORITY), osSys_ ## NAME ## StackBuffer, &osSys_ ## NAME ## TaskBuffer)
+
+/**
+ * @brief Create a task using static memory, pinned to one CPU core (ESP-IDF).
+ *
+ * Same as STATIC_MEM_TASK_CREATE(), CORE is the core id (see FLIGHT_TASK_CORE
+ * in config.h) or tskNO_AFFINITY.
+ */
+#define STATIC_MEM_TASK_CREATE_PINNED(NAME, FUNCTION, TASK_NAME, PARAMETERS, PRIORITY, CORE) xTaskCreateStaticPinnedToCore((FUNCTION), (TASK_NAME), osSys_ ## NAME ## StackDepth, (PARAMETERS), (PRIORITY), osSys_ ## NAME ## StackBuffer, &osSys_ ## NAME ## TaskBuffer, (CORE))

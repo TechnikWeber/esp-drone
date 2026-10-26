@@ -356,7 +356,11 @@ void soundInit(void)
 
 bool soundTest(void)
 {
+#ifdef CONFIG_BUZZER_ON
   return isInit;
+#else
+  return true; // no buzzer fitted: nothing to test
+#endif
 }
 
 void soundSetEffect(uint32_t effect)

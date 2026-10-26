@@ -31,6 +31,7 @@
 /*to support different hardware platform */
 static platformConfig_t configs[] = {
 
+#ifdef SENSOR_INCLUDED_MPU6050_HMC5883L_MS5611
     {
         .deviceType = "EP20",
         .deviceTypeName = "ESPlane 2.0 ",
@@ -45,6 +46,16 @@ static platformConfig_t configs[] = {
         .physicalLayoutAntennasAreClose = false,
         .motorMap = motorMapDefaultBrushed,
     },
+#endif
+#ifdef SENSOR_INCLUDED_MPU6500_SPI
+    {
+        .deviceType = "E1MN",
+        .deviceTypeName = "CHERGLOW E1 Mini",
+        .sensorImplementation = SensorImplementation_mpu6500_spi,
+        .physicalLayoutAntennasAreClose = false,
+        .motorMap = motorMapDefaultBrushed,
+    },
+#endif
 
 };
 
@@ -64,5 +75,9 @@ bool platformInitHardware()
 
 const char *platformConfigGetPlatformName()
 {
+#ifdef CONFIG_TARGET_E1_MINI
+    return "E1MN";
+#else
     return "ED12";
+#endif
 }

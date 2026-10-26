@@ -117,7 +117,8 @@ void pmInit(void)
     return;
   }
 
-    pmEnableExtBatteryVoltMeasuring(CONFIG_ADC1_PIN, 2); // ADC1 PIN is fixed to ADC channel
+    // Vbat = Vadc * divider ratio (menuconfig BATTERY_DIVIDER_X1000)
+    pmEnableExtBatteryVoltMeasuring(CONFIG_ADC1_PIN, CONFIG_BATTERY_DIVIDER_X1000 / 1000.0f);
 
     pmSyslinkInfo.pgood = false;
     pmSyslinkInfo.chg = false;

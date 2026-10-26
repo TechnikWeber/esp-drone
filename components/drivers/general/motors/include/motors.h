@@ -36,7 +36,8 @@
 
 // CF2 PWM ripple is filtered better at 328kHz. At 168kHz the NCP702 regulator is affected.
 
-#define MOTORS_PWM_BITS           LEDC_TIMER_8_BIT
+#define MOTORS_PWM_BITS           ((ledc_timer_bit_t)CONFIG_MOTOR_PWM_BITS)
+#define MOTORS_PWM_FREQ_HZ        CONFIG_MOTOR_PWM_FREQ_HZ
 #define MOTORS_PWM_PERIOD         ((1<<MOTORS_PWM_BITS) - 1)
 #define MOTORS_TIM_BEEP_CLK_FREQ  4000000
 
@@ -156,6 +157,13 @@ extern const MotorPerifDef *motorMapDefaultBrushed[NBR_OF_MOTORS];
  */
 extern const uint16_t testsound[NBR_OF_MOTORS];
 /*** Public interface ***/
+
+/**
+ * Drive all motor pins low as plain GPIO outputs. Call this first thing at
+ * boot: until motorsInit() attaches the PWM the pins would otherwise float
+ * (GPIO12/14/15 have internal pull resistors at reset on the ESP32).
+ */
+void motorsPinsSafeOff(void);
 
 /**
  * Initialisation. Will set all motors ratio to 0%

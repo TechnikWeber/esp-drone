@@ -4,7 +4,7 @@ menu "ESPDrone Config"
         prompt "ESP_Drone hardware version"
         default TARGET_ESP32_S2_DRONE_V1_2 if IDF_TARGET_ESP32S3
         default TARGET_ESP32_S2_DRONE_V1_2 if IDF_TARGET_ESP32S2
-        default TARGET_ESPLANE_V1 if IDF_TARGET_ESP32
+        default TARGET_E1_MINI if IDF_TARGET_ESP32
         default TARGET_PORTABLE_SAFE if IDF_TARGET_ESP32P4 || IDF_TARGET_ESP32S31
 
         config TARGET_ESPLANE_V1
@@ -15,6 +15,15 @@ menu "ESPDrone Config"
 
         config TARGET_ESP32_S2_DRONE_V1_2
             bool "esp-drone with ESP32-S2/ESP32-S3 onboard"
+
+        config TARGET_E1_MINI
+            bool "CHERGLOW E1 Mini (ESP32 DevKit 30 pin, MPU6500 on SPI)"
+            depends on IDF_TARGET_ESP32
+            help
+                Mini quadcopter kit: a plain ESP32 DevKit V1 (30 pin) plugged onto
+                the frame PCB, an MPU6500 on SPI without interrupt line and four
+                brushed 8520 motors driven by AO3416 MOSFETs.
+                See docs/e1-mini.md for the pinout and the bench test checklist.
 
         config TARGET_PORTABLE_SAFE
             bool "portable safe profile (outputs disabled)"
@@ -163,10 +172,13 @@ menu "ESPDrone Config"
         config BUZZER_ON
             bool "enable buzzer to play sound"
             default n if TARGET_PORTABLE_SAFE
+            default n if TARGET_E1_MINI
             default y
 
         config BUZ1_PIN_POS
             int "BUZ1_PIN_POS GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 26 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 27 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -175,10 +187,13 @@ menu "ESPDrone Config"
             default 39 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) BUZ1_PIN_POS
+                GPIO number (IOxx) BUZ1_PIN_POS. Only used when BUZZER_ON is set
+                (the E1 Mini has no buzzer).
 
         config BUZ2_PIN_NEG
             int "BUZ2_PIN_NEG GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 27 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 26 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -187,13 +202,74 @@ menu "ESPDrone Config"
             default 38 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) BUZ2_PIN_NEG
+                GPIO number (IOxx) BUZ2_PIN_NEG. Only used when BUZZER_ON is set.
 
     endmenu
 
     menu "sensors config"
+        choice IMU_TYPE
+            prompt "IMU (gyroscope and accelerometer)"
+            default IMU_MPU6500_SPI if TARGET_E1_MINI
+            default IMU_MPU6050_I2C
+
+            config IMU_MPU6050_I2C
+                bool "MPU6050 on I2C0 with data-ready interrupt"
+
+            config IMU_MPU6500_SPI
+                bool "MPU6500 / MPU9250 on SPI, sampled by a 1 kHz hardware timer"
+                help
+                    The sensor shares the SPI bus (SPI_PIN_CLK/MISO/MOSI) with the
+                    optional PMW3901 flow sensor and has its own chip select.
+                    No interrupt line is needed.
+        endchoice
+
+        config IMU_SPI_PIN_CS
+            int "IMU SPI chip select GPIO number"
+            depends on IMU_MPU6500_SPI
+            range 0 33 if IDF_TARGET_ESP32
+            range 0 48
+            default 5
+
+        config IMU_SPI_CLOCK_HZ
+            int "IMU SPI clock for sensor reads (Hz)"
+            depends on IMU_MPU6500_SPI
+            range 1000000 20000000
+            default 8000000
+            help
+                Register writes always run at 1 MHz (datasheet limit). Reading
+                the sensor registers is allowed up to 20 MHz. Lower this value if
+                the wiring is long or the readings are noisy.
+
+        choice IMU_ROTATION
+            prompt "IMU mounting: sensor axes to body axes"
+            depends on IMU_MPU6500_SPI
+            default IMU_ROTATION_270 if TARGET_E1_MINI
+            default IMU_ROTATION_0
+            help
+                Body frame: X forward, Y left, Z up (Crazyflie convention).
+                E1 Mini: the sensor's Y axis points forward and its X axis to the
+                right (vendor firmware: imuRotation yaw = -90 deg), i.e. 270 deg.
+                Check it on the bench as described in docs/e1-mini.md.
+
+            config IMU_ROTATION_0
+                bool "0 deg: body X = sensor X, body Y = sensor Y"
+            config IMU_ROTATION_90
+                bool "90 deg: body X = -sensor Y, body Y = sensor X"
+            config IMU_ROTATION_180
+                bool "180 deg: body X = -sensor X, body Y = -sensor Y"
+            config IMU_ROTATION_270
+                bool "270 deg: body X = sensor Y, body Y = -sensor X (E1 Mini)"
+        endchoice
+
+        config IMU_UPSIDE_DOWN
+            bool "IMU is mounted upside down (rotated 180 deg about body X)"
+            depends on IMU_MPU6500_SPI
+            default n
+
         config I2C0_PIN_SDA
             int "I2C0_PIN_SDA GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 21 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 21 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -202,10 +278,13 @@ menu "ESPDrone Config"
             default 11 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) I2C0_PIN_SDA
+                GPIO number (IOxx) I2C0_PIN_SDA. I2C0 is the MPU6050 bus; it is not
+                started when the IMU is on SPI (E1 Mini).
 
         config I2C0_PIN_SCL
             int "I2C0_PIN_SCL GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 22 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 22 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -218,6 +297,8 @@ menu "ESPDrone Config"
 
         config I2C1_PIN_SDA
             int "I2C1_PIN_SDA GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 21 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 16 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -226,10 +307,13 @@ menu "ESPDrone Config"
             default 40 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) I2C1_PIN_SDA
+                GPIO number (IOxx) I2C1_PIN_SDA. I2C1 is the expansion bus
+                (VL53L1X range sensor, config EEPROM).
 
         config I2C1_PIN_SCL
             int "I2C1_PIN_SCL GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 22 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 17 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -242,6 +326,8 @@ menu "ESPDrone Config"
 
         config SPI_PIN_MISO
             int "SPI_PIN_MISO GPIO number"
+            range 0 39 if TARGET_E1_MINI
+            default 19 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 12 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -254,6 +340,8 @@ menu "ESPDrone Config"
 
         config SPI_PIN_MOSI
             int "SPI_PIN_MOSI GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 23 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 13 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -266,6 +354,8 @@ menu "ESPDrone Config"
 
         config SPI_PIN_CLK
             int "SPI_PIN_CLK GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 18 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 14 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -278,6 +368,8 @@ menu "ESPDrone Config"
 
         config SPI_PIN_CS0
             int "SPI_PIN_CS0 GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 33 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 15 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -286,10 +378,13 @@ menu "ESPDrone Config"
             default 34 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) SPI_PIN_CS0
+                GPIO number (IOxx) SPI_PIN_CS0 (chip select of the PMW3901 flow
+                sensor on the expansion board).
 
         config MPU_PIN_INT
             int "MPU_PIN_INT GPIO number"
+            range -1 39 if TARGET_E1_MINI
+            default -1 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 19 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -298,10 +393,13 @@ menu "ESPDrone Config"
             default 12 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) MPU_PIN_INT
+                GPIO number (IOxx) MPU_PIN_INT. Only used by the MPU6050 driver;
+                -1 = not connected.
 
         config ADC1_PIN
-            int "EXT01_PIN GPIO number"
+            int "Battery voltage ADC1 GPIO number"
+            range 32 39 if TARGET_E1_MINI
+            default 36 if TARGET_E1_MINI
             range 32 39 if TARGET_ESPLANE_V1
             default 35 if TARGET_ESPLANE_V1
             range 1 10 if TARGET_ESPLANE_V2_S2
@@ -310,10 +408,22 @@ menu "ESPDrone Config"
             default 2 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) ADC1_PIN
+                GPIO number (IOxx) of the battery voltage divider. Must be an ADC1
+                pin (ADC2 does not work while Wi-Fi is on).
+
+        config BATTERY_DIVIDER_X1000
+            int "Battery voltage divider ratio x1000 (Vbat / Vadc)"
+            range 1000 10000
+            default 1303 if TARGET_E1_MINI
+            default 2000
+            help
+                E1 Mini: 10k from the battery, 33k to ground, so
+                Vbat = Vadc * 43 / 33 = Vadc * 1.303.
 
         config EXT01_PIN
             int "EXT01_PIN GPIO number"
+            range 0 39 if TARGET_E1_MINI
+            default 32 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 34 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -328,6 +438,8 @@ menu "ESPDrone Config"
     menu "led config"
         config LED_PIN_BLUE
             int "LED_PIN_BLUE GPIO number"
+            range -1 33 if TARGET_E1_MINI
+            default 2 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 18 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -336,10 +448,13 @@ menu "ESPDrone Config"
             default 7 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) LED_PIN_BLUE
+                GPIO number (IOxx) LED_PIN_BLUE, -1 = not connected.
+                On the E1 Mini this is the blue LED of the DevKit (GPIO2).
 
         config LED_PIN_GREEN
             int "LED_PIN_GREEN GPIO number"
+            range -1 33 if TARGET_E1_MINI
+            default -1 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 5 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -348,10 +463,12 @@ menu "ESPDrone Config"
             default 9 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) LED_PIN_GREEN
+                GPIO number (IOxx) LED_PIN_GREEN, -1 = not connected
 
         config LED_PIN_RED
             int "LED_PIN_RED GPIO number"
+            range -1 33 if TARGET_E1_MINI
+            default -1 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 23 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -360,13 +477,14 @@ menu "ESPDrone Config"
             default 8 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) LED_PIN_RED
+                GPIO number (IOxx) LED_PIN_RED, -1 = not connected
 
     endmenu
 
     menu "motors config"
         choice
             prompt "Motor type"
+            default MOTOR_BRUSHED_8520 if TARGET_E1_MINI
             default MOTOR_BRUSHED_715 if TARGET_ESPLANE_V1 || TARGET_ESPLANE_V2_S2
             default MOTOR_BRUSHED_720 if TARGET_ESP32_S2_DRONE_V1_2
             default MOTOR_BRUSHED_720 if TARGET_PORTABLE_SAFE
@@ -376,6 +494,9 @@ menu "ESPDrone Config"
     
             config MOTOR_BRUSHED_720
                 bool "brushed 720 motor"
+
+            config MOTOR_BRUSHED_8520
+                bool "brushed 8520 motor"
         endchoice
 
         config MOTORS_STARTUP_TEST
@@ -387,6 +508,8 @@ menu "ESPDrone Config"
 
         config MOTOR01_PIN
             int "MOTOR01_PIN GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 15 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 4 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -395,10 +518,13 @@ menu "ESPDrone Config"
             default 5 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) MOTOR01_PIN
+                GPIO number (IOxx) MOTOR01_PIN. M1 is front right
+                (E1 Mini: GPIO15).
 
         config MOTOR02_PIN
             int "MOTOR02_PIN GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 13 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 33 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -407,10 +533,13 @@ menu "ESPDrone Config"
             default 6 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) MOTOR02_PIN
+                GPIO number (IOxx) MOTOR02_PIN. M2 is rear right
+                (E1 Mini: GPIO13).
 
         config MOTOR03_PIN
             int "MOTOR03_PIN GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 12 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 32 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -419,10 +548,13 @@ menu "ESPDrone Config"
             default 3 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) MOTOR03_PIN
+                GPIO number (IOxx) MOTOR03_PIN. M3 is rear left
+                (E1 Mini: GPIO12).
 
         config MOTOR04_PIN
             int "MOTOR04_PIN GPIO number"
+            range 0 33 if TARGET_E1_MINI
+            default 14 if TARGET_E1_MINI
             range 0 34 if TARGET_ESPLANE_V1
             default 25 if TARGET_ESPLANE_V1
             range 0 43 if TARGET_ESPLANE_V2_S2
@@ -431,7 +563,33 @@ menu "ESPDrone Config"
             default 4 if TARGET_ESP32_S2_DRONE_V1_2
             default 0 if TARGET_PORTABLE_SAFE
             help
-                GPIO number (IOxx) MOTOR04_PIN
+                GPIO number (IOxx) MOTOR04_PIN. M4 is front left
+                (E1 Mini: GPIO14).
+
+
+        config MOTOR_PWM_FREQ_HZ
+            int "Motor PWM frequency (Hz)"
+            range 1000 40000
+            default 25000 if TARGET_E1_MINI
+            default 15000
+            help
+                PWM frequency for brushed motors driven by MOSFETs. The E1 Mini
+                vendor firmware uses 25 kHz.
+
+        config MOTOR_PWM_BITS
+            int "Motor PWM resolution (bits)"
+            range 8 10
+            default 10 if TARGET_E1_MINI
+            default 8
+
+        config MOTOR_YAW_INVERT
+            bool "Invert the yaw output of the motor mixer"
+            default n
+            help
+                The mixer expects M1 and M3 to spin opposite to M2 and M4 as on the
+                Crazyflie. If the drone turns the wrong way on a yaw command (or
+                starts spinning around its vertical axis by itself), the
+                propellers spin the other way round: enable this option.
     endmenu
 
 

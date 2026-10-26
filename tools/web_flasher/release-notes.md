@@ -31,6 +31,11 @@ From the box to the first hover:
 - Battery protection: forced landing below 3.0 V, no arming below 3.4 V.
 - Roll and pitch trim, stored on the drone, and one-tap levelling on the ground.
   Control page in English and German.
+- **Desktop ground station** (`esp-drone-groundstation.html` below, open it in Chrome or Edge):
+  fly with a gamepad (PlayStation, Xbox, Switch Pro and others), live plots of the flight
+  controller at 100 Hz, controller gains changeable in flight and stored on the drone, step test,
+  motor test for the bench, flight recorder with CSV export. Guide:
+  [docs/groundstation.md](https://github.com/{{REPO}}/blob/webcontrol/docs/groundstation.md).
 - Board support for the E1 Mini (ESP32 DevKit, MPU6500 on SPI, 8520 motors) with controller
   gains from the vendor firmware.
 - Based on espressif/esp-drone `master@9d5a4f8`, built with ESP-IDF 5.5.

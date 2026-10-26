@@ -7,7 +7,8 @@ merged firmware images.
 
 --bins holds the images built by .github/workflows/release.yml
 (espdrone-<board>-<chip>.bin, each written at address 0x0). The site gets
-index.html, one ESP Web Tools manifest per board, the images and SHA256SUMS.txt.
+index.html, one ESP Web Tools manifest per board, the images, SHA256SUMS.txt and
+the desktop ground station as one file (esp-drone-groundstation.html).
 
 Copyright 2026 Philipp Weber
 SPDX-License-Identifier: GPL-3.0-only
@@ -90,6 +91,10 @@ def main():
 
     for name, src in PICTURES.items():
         shutil.copyfile(src, os.path.join(args.out, name))
+    # The ground station is opened from disk (see docs/groundstation.md): the
+    # site offers it as a download and the release attaches it.
+    shutil.copyfile(os.path.join(ROOT, "tools", "groundstation", "index.html"),
+                    os.path.join(args.out, "esp-drone-groundstation.html"))
 
     values = {"VERSION": args.version, "REPO": args.repo, "SHA256SUMS": "\n".join(sums)}
     with open(os.path.join(HERE, "index.html")) as f:

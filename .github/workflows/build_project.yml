@@ -9,6 +9,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests of the web control core
+        run: make -C components/webctrl/host_test
+      - name: Python tools
+        run: python3 -m py_compile tools/*.py tools/groundstation/*.py tools/web_flasher/*.py
+      - name: Scripts of the control page and the ground station
+        run: |
+          for page in components/webctrl/web/index.html tools/groundstation/index.html; do
+            sed -n '/<script>/,/<\/script>/p' "$page" | sed '1d;$d' > /tmp/page.js
+            node --check /tmp/page.js
+          done
+
   build:
     strategy:
       fail-fast: false

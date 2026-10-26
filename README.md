@@ -15,10 +15,11 @@ Dies ist eine **geänderte Fassung** von [espressif/esp-drone](https://github.co
   (Gas einmal auf null) oder `system.forceArm`. NOT-AUS von jedem verbundenen Handy.
 - Partitionstabelle mit zwei App-Bereichen und Core-Dump-Bereich.
 
-Alle Boards und ESP-IDF-Versionen des Originals bleiben unterstützt. Gebaut und
-geprüft mit ESP-IDF 5.5: E1 Mini und ESPlane (ESP32), ESP32-S2-Drone (S2 und S3),
-ESP32-P4 (ohne Web-Steuerung, der P4 hat kein eigenes WLAN). **Auf echter Hardware
-ist noch nichts getestet.** Auf dem ESP32-S2 ist der interne RAM knapp: Dort sind
+Alle Boards des Originals bleiben erhalten. Erfolgreich gebaut mit ESP-IDF 5.5:
+E1 Mini und ESPlane (ESP32), ESP32-S2-Drone (S2 und S3), ESP32-P4 (ohne
+Web-Steuerung, der P4 hat kein eigenes WLAN). Mit ESP-IDF 6.1 und für den
+ESP32-S31 ist diese Fassung noch nicht gebaut. **Auf echter Hardware ist noch
+nichts getestet.** Auf dem ESP32-S2 ist der interne RAM knapp: Dort sind
 Core-Dump und die SPI-Interrupt-Routine im RAM abgeschaltet; ob der Heap für die
 Web-Steuerung reicht, muss ein Test zeigen.
 

@@ -1015,7 +1015,7 @@ function sendTrimFrame(r, p) {
 
 // ===== parameters (controller gains) ==========================================
 const gains = {};            // name -> {value, dflt, writable}
-let gainsStored = false, gainReqId = 0;
+let gainsStored = false, gainReqId = 0, gainRetry = 0;
 const gainEdits = {};        // name -> value typed but not sent
 const pendingParams = {};    // reqId -> {op, name, value}
 function sendParam(op, name, value) {
@@ -1048,6 +1048,10 @@ function onParamReply(v) {
   }
   if (status === 1 || !name) { renderGains(); return; }
   gains[name] = { value, dflt: Number.isFinite(dflt) ? dflt : null, writable: !!(flags & PF_WRITABLE) };
+  // The drone sets its gains up a moment after the start: read again until they are ready.
+  if (GAIN_NAMES.includes(name) && !(flags & PF_WRITABLE) && !gainRetry) {
+    gainRetry = setTimeout(() => { gainRetry = 0; if (link.infoSeen) readAllGains(); }, 2000);
+  }
   if (op === P_WRITE) {
     if (status === 0) {
       logEvent(t("gainSet")(name, +value.toPrecision(4)), "info");

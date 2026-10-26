@@ -517,7 +517,10 @@ def on_param(c, frame):
         print(f"[drone] gains {'reset' if op == PARAM_RESET else 'stored'}")
         param_reply(c, op, req, P_OK)
         return
-    if name in drone.gains:
+    if name in drone.gains and not drone.ready():
+        # like the firmware: the gains are set up once the system has started
+        param_reply(c, op, req, P_BUSY if op == PARAM_WRITE else P_OK, name, drone.gains[name])
+    elif name in drone.gains:
         status = P_OK
         if op == PARAM_WRITE:
             if drone.motor_test or (drone.token and c is not drone.pilot):

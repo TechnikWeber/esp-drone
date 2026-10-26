@@ -31,6 +31,31 @@ box to the first hover: [docs/getting-started.md](docs/getting-started.md).
   </tr>
 </table>
 
+**Desktop ground station with gamepad:** on a computer, fly with a PlayStation,
+Xbox or Switch Pro controller (or an RC transmitter over USB), watch the flight
+controller in live plots at 100 Hz, tune the controller gains in flight, check
+the motors one by one and record every flight. One HTML file that works
+offline, no installation: [docs/groundstation.md](docs/groundstation.md).
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/groundstation-flight.png" alt="Ground station while flying with a gamepad: horizon, stick input, plots of setpoint and actual attitude, motors and battery, controller settings"></td>
+    <td width="50%"><img src="docs/images/groundstation-tuning.png" alt="Step test: rate setpoint, gyro and the previous test in grey, next to the table of controller gains"></td>
+  </tr>
+  <tr>
+    <td><b>Flying with a gamepad.</b> Setpoint and actual attitude, motors and battery live; rumble, warning tones and voice announcements.</td>
+    <td><b>Tuning.</b> Change the gains in flight and store them on the drone. The step test holds the response and shows the previous one in grey.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/groundstation-motors.png" alt="Motor test: drone seen from above, motor M2 spinning at 15 percent"></td>
+    <td><img src="docs/images/groundstation-recorder.png" alt="Recorder with two recorded flights and the plots of a whole minute"></td>
+  </tr>
+  <tr>
+    <td><b>Motor test.</b> Spin each motor alone on the bench and check its position and direction.</td>
+    <td><b>Recorder.</b> Every flight at 100 Hz, saved as CSV, plus an event log.</td>
+  </tr>
+</table>
+
 <img src="docs/images/e1-mini.jpg" align="right" width="300" alt="E1 Mini quadcopter kit with a plug-in ESP32 DevKit">
 
 What this fork adds to [espressif/esp-drone](https://github.com/espressif/esp-drone)
@@ -45,6 +70,11 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
   page speaks English and German. See [docs/webcontrol.md](docs/webcontrol.md).
 - **Battery protection and trim** for web flights: forced landing below 3.0 V,
   no arming below 3.4 V, roll and pitch trim stored on the drone.
+- **Desktop ground station** ([docs/groundstation.md](docs/groundstation.md)):
+  gamepad control, live plots, controller gains changeable in flight and
+  stored on the drone, step test, motor test, flight recorder. The firmware
+  sends 100 Hz samples of the flight controller, the gains and the motor test
+  over the same WebSocket (protocol 3, the phone page keeps working).
 - **New board: E1 Mini** (pictured), a mini quadcopter kit with a plug-in
   ESP32 DevKit and an MPU6500 on SPI. Sellers use many brand names; "ESP32
   Drone" and "E1" or "E1 Mini" are in almost every listing. Its open hardware
@@ -77,7 +107,7 @@ ESP-IDF 5.5 and 6.1: ESP32 (E1 Mini), ESP32-S2 and -S3 (ESP32-S2-Drone), ESP32-P
 (without web control, the P4 has no Wi-Fi of its own) and ESP32-S31 (preview).
 ESPlane (ESP32) was built locally with 5.5. **Nothing has been tested on real
 hardware yet;** the screenshots come from the simulated drone in
-`tools/mock_drone.py`. RAM on the ESP32-S2 is tight: the core dump is off there
+`tools/mock_drone.py` (with a simulated gamepad for the ground station). RAM on the ESP32-S2 is tight: the core dump is off there
 and the SPI interrupt handler is not in IRAM; a test has to show whether the heap
 is enough for web control.
 

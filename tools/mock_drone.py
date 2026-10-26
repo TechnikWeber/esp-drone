@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Simulated drone for developing and testing the web control page without
-hardware. Python standard library only.
+Simulated drone for developing and testing the web control page and the
+desktop ground station without hardware. Python standard library only.
 
     python3 tools/mock_drone.py                      # page on :8080, control on :8081
     python3 tools/mock_drone.py --stall-every 10 --stall-ms 700
 
-Open http://127.0.0.1:8080/?host=127.0.0.1:8081 in a browser (or on a phone
-in the same network with your PC's address).
+Control page: http://127.0.0.1:8080/?host=127.0.0.1:8081 (or on a phone in the
+same network with your PC's address). Ground station:
+python3 tools/groundstation/groundstation.py --drone 127.0.0.1:8081
 
 The mock speaks the same WebSocket protocol as the firmware (docs/webcontrol.md)
-and imitates its link failsafe stages with the default thresholds. It is a
-UI tool, the real logic is tested in components/webctrl/host_test.
+and imitates its link failsafe stages with the default thresholds. Attitude and
+rates come from a small simulation of the Crazyflie PID controller and the
+airframe, so changed gains in the ground station change the step response. It
+is a UI tool; the real logic is tested in components/webctrl/host_test.
 
 --stall-every N --stall-ms M  hold back incoming frames for M ms every N s,
                               like a TCP retransmission stall, then deliver
@@ -23,6 +26,9 @@ UI tool, the real logic is tested in components/webctrl/host_test.
                               forced landing after about 10 s of hovering.
 --imu-offset R,P              the sensor reads roll R and pitch P degrees while
                               the drone stands level (try "Level on the ground")
+--turbulence T                strength of the simulated gusts (default 1, 0 = calm)
+--legacy                      behave like firmware v0.2 (protocol 2: no gains,
+                              no fast samples, no motor test)
 
 Copyright 2026 Philipp Weber
 SPDX-License-Identifier: GPL-3.0-only
@@ -43,19 +49,107 @@ import time
 PAGE = os.path.join(os.path.dirname(__file__), "..", "components", "webctrl", "web", "index.html")
 
 # protocol (webctrl_core.h)
-PROTO = 2
-MSG_CONTROL, MSG_HELLO, MSG_TRIM, MSG_TELEMETRY = 0x01, 0x02, 0x03, 0x81
+PROTO = 3
+MSG_CONTROL, MSG_HELLO, MSG_TRIM, MSG_PARAM, MSG_STREAM, MSG_MOTOR_TEST = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
+MSG_TELEMETRY, MSG_FAST, MSG_PARAM_REPLY, MSG_MOTOR_REPLY = 0x81, 0x82, 0x84, 0x86
 F_ARM, F_KILL, F_PAUSE = 1, 2, 4
 S_ARMED, S_YOU, S_OTHER, S_FAILSAFE, S_LOWBAT, S_BLOCKED, S_READY, S_TUMBLED = 1, 2, 4, 8, 16, 32, 64, 128
-S2_BAT_LAND, S2_BAT_NOARM = 1, 2
+S2_BAT_LAND, S2_BAT_NOARM, S2_MOTOR_TEST = 1, 2, 4
 STOP_RELEASED, STOP_KILL, STOP_LINK, STOP_TUMBLED, STOP_BATTERY = 1, 2, 3, 4, 5
+ARM_OK, ARM_NOT_READY, ARM_THRUST, ARM_BATTERY, ARM_OTHER, ARM_TUMBLED, ARM_RELEASE, ARM_MOTOR_TEST = range(8)
 OK_MS, HOLD_MS, DESCEND_MS, OFF_MS, STALE_MS = 100, 300, 1000, 4000, 250
 BAT_LAND_V, BAT_ARM_V, BAT_LOW_V, BAT_DELAY_S, BAT_LAND_S, SAG_V = 3.0, 3.4, 3.2, 1.0, 10.0, 0.4
 TRIM_MAX = 50
+MAX_ANGLE, MAX_YAW_RATE = 15, 120
+PARAM_READ, PARAM_WRITE, PARAM_SAVE, PARAM_RESET = range(4)
+P_OK, P_UNKNOWN, P_DENIED, P_BUSY, P_INVALID = range(5)
+PF_WRITABLE, PF_STORED = 1, 2
+MOTOR_OK, MOTOR_NOT_READY, MOTOR_BUSY, MOTOR_DISABLED = range(4)
+MOTOR_MAX_PERCENT, MOTOR_MAX_MS = 30, 3000
+FAST_PERIOD_MS, FAST_SAMPLES = 10, 5
+WEB_MAX_THRUST = 60000.0
+HOVER = 0.55                    # thrust that lifts the simulated drone
+
+# Controller gains of the E1 Mini (pid.h)
+GAINS = {
+    "pid_rate.roll_kp": 137.0, "pid_rate.roll_ki": 229.0, "pid_rate.roll_kd": 2.3,
+    "pid_rate.pitch_kp": 137.0, "pid_rate.pitch_ki": 229.0, "pid_rate.pitch_kd": 2.3,
+    "pid_rate.yaw_kp": 120.0, "pid_rate.yaw_ki": 16.7, "pid_rate.yaw_kd": 0.0,
+    "pid_attitude.roll_kp": 5.9, "pid_attitude.roll_ki": 2.9, "pid_attitude.roll_kd": 0.0,
+    "pid_attitude.pitch_kp": 5.9, "pid_attitude.pitch_ki": 2.9, "pid_attitude.pitch_kd": 0.0,
+    "pid_attitude.yaw_kp": 6.0, "pid_attitude.yaw_ki": 1.0, "pid_attitude.yaw_kd": 0.35,
+}
+OTHER_PARAMS = {"stabilizer.controller": 1.0, "stabilizer.estimator": 1.0, "motorPowerSet.enable": 0.0,
+                "powerDist.idleThrust": 0.0}
 
 
 def now_ms():
     return int(time.monotonic() * 1000) & 0xFFFFFFFF
+
+
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
+class Pid:
+    """Crazyflie pid.c: P, I with a limit, D on the error."""
+
+    def __init__(self, ilimit):
+        self.ilimit, self.integ, self.prev = ilimit, 0.0, 0.0
+
+    def reset(self):
+        self.integ, self.prev = 0.0, 0.0
+
+    def update(self, err, kp, ki, kd, dt):
+        self.integ = clamp(self.integ + err * dt, -self.ilimit, self.ilimit)
+        d = (err - self.prev) / dt
+        self.prev = err
+        return kp * err + ki * self.integ + kd * d
+
+
+class Axis:
+    """One rotation axis: cascaded attitude and rate PID, sensor and motor lag,
+    inertia. With 8 ms of delay in the loop, too much rate P makes it
+    oscillate like a real airframe."""
+
+    DELAY_STEPS = 4             # 4 x 2 ms: sensor filter and processing
+
+    def __init__(self, name, gain, damping, ilimit_att, ilimit_rate):
+        self.name, self.gain, self.damping = name, gain, damping
+        self.att, self.rate_pid = Pid(ilimit_att), Pid(ilimit_rate)
+        self.angle = self.rate = self.torque = self.gust = 0.0
+        self.angle_sp = self.rate_sp = self.out = self.gyro = self.seen = 0.0
+        self.delayed = [(0.0, 0.0)] * self.DELAY_STEPS
+
+    def reset_controller(self):
+        self.att.reset()
+        self.rate_pid.reset()
+        self.out = 0.0
+
+    def g(self, kind, term):
+        return drone.gains[f"pid_{kind}.{self.name}_{term}"]
+
+    def step(self, dt, flying, turbulence):
+        self.delayed.append((self.angle, self.rate))
+        self.seen, rate = self.delayed.pop(0)
+        self.gyro = rate + random.gauss(0, 0.6)               # vibration noise
+        err = self.angle_sp - self.seen
+        if self.name == "yaw":
+            err = (err + 180) % 360 - 180
+        self.rate_sp = self.att.update(err, self.g("attitude", "kp"), self.g("attitude", "ki"),
+                                       self.g("attitude", "kd"), dt)
+        self.out = clamp(self.rate_pid.update(self.rate_sp - self.gyro, self.g("rate", "kp"),
+                                              self.g("rate", "ki"), self.g("rate", "kd"), dt), -32767, 32767)
+        if not flying:                       # on the ground: nothing turns
+            self.angle = self.rate = self.torque = self.gust = 0.0
+            return
+        self.torque += (self.out - self.torque) * dt / 0.02                # motor lag
+        self.gust += (-self.gust / 0.4 + random.gauss(0, 900) * turbulence) * dt
+        accel = self.gain * (self.torque + self.gust) - self.damping * self.rate
+        self.rate += accel * dt
+        self.angle += self.rate * dt
+        if self.name == "yaw":
+            self.angle = (self.angle + 180) % 360 - 180
 
 
 class Drone:
@@ -70,7 +164,6 @@ class Drone:
         self.stale = 0
         self.min_offset = None
         self.stage = 4
-        self.roll = self.pitch = self.yaw = 0.0
         self.thrust = 0.0
         self.vbat_rest = 4.10
         self.trim = (0, 0)          # 1/10 deg, stored on the drone
@@ -80,12 +173,25 @@ class Drone:
         self.land_from = 0.0
         self.low_since = None
         self.boot = time.monotonic()
+        self.gains = dict(GAINS)
+        self.stored = None          # gains "in flash"
+        self.roll = Axis("roll", 0.40, 2.0, 20.0, 33.3)
+        self.pitch = Axis("pitch", 0.40, 2.0, 20.0, 33.3)
+        self.yaw = Axis("yaw", 0.08, 1.5, 360.0, 166.7)
+        self.motors = [0, 0, 0, 0]
+        self.motor_test = None      # (client, mask, percent, until_ms)
+        self.fast = []              # samples of the current FAST frame
+        self.fast_seq = 0
+        self.fast_t0 = 0
 
     def ready(self):
         return time.monotonic() - self.boot > 3.0      # "calibration" takes 3 s
 
     def vbat(self):
         return max(0.0, self.vbat_rest - SAG_V * self.thrust)   # sags under load
+
+    def busy(self):
+        return bool(self.token) or self.motor_test is not None
 
     def age(self, t):
         if self.last is None:
@@ -102,10 +208,16 @@ class Drone:
         self.pilot, self.token, self.last, self.stage, self.thrust = None, 0, None, 4, 0.0
         self.stop_reason, self.landing, self.low_since = reason, False, None
 
+    def stop_motor_test(self, why):
+        if self.motor_test:
+            print(f"[drone] motor test stopped: {why}")
+            self.motor_test = None
+
     def on_control(self, c, frame, t):
         flags, seq, cms, roll, pitch, yaw, thr = struct.unpack_from("<BHIhhhH", frame, 1)
         if flags & F_KILL:
             print("[drone] KILL")
+            self.stop_motor_test("KILL")
             if self.token:
                 self.end_session("KILL", STOP_KILL)
             self.stop_reason = STOP_KILL
@@ -130,21 +242,23 @@ class Drone:
         c.echo = (seq, cms)
         c.rx += 1
         if not flags & F_ARM:
-            c.released, c.arm_result = True, 0
+            c.released, c.arm_result = True, ARM_OK
             return
         if self.token:
-            c.arm_result = 4
+            c.arm_result = ARM_OTHER
             return
-        if not c.released:
-            c.arm_result = 6
+        if self.motor_test:
+            c.arm_result = ARM_MOTOR_TEST
+        elif not c.released:
+            c.arm_result = ARM_RELEASE
         elif not self.ready():
-            c.arm_result = 1
+            c.arm_result = ARM_NOT_READY
         elif 0.5 <= self.vbat() < BAT_ARM_V:
-            c.arm_result = 3
+            c.arm_result = ARM_BATTERY
         elif thr > 20:
-            c.arm_result = 2
+            c.arm_result = ARM_THRUST
         else:
-            c.arm_result = 0
+            c.arm_result = ARM_OK
             self.pilot, self.token = c, random.getrandbits(31) | 1
             self.last, self.last_fresh, self.connected, self.stale = (roll, pitch, yaw, thr), t, True, 0
             self.min_offset = offset
@@ -161,7 +275,7 @@ class Drone:
                     if self.thrust < 0.15:
                         self.end_session("battery empty", STOP_BATTERY)
                         return None
-                    self.landing, self.land_t0, self.land_from = True, t, min(self.thrust, 0.55)
+                    self.landing, self.land_t0, self.land_from = True, t, min(self.thrust, HOVER)
                     print(f"[drone] battery {v:.2f} V: forced landing")
             else:
                 self.low_since = None
@@ -175,7 +289,7 @@ class Drone:
     def step(self, dt):
         t = now_ms()
         tr, tp = self.trim[0] / 10, self.trim[1] / 10
-        target = (0.0, 0.0, 0.0)
+        roll_sp, pitch_sp, yaw_rate = 0.0, 0.0, 0.0       # pitch + = forward, yaw + = to the right
         if self.token:
             age = self.age(t)
             stage = 0 if age < OK_MS else 1 if age < HOLD_MS else 2 if age < DESCEND_MS else 3 if age < OFF_MS else 4
@@ -185,22 +299,70 @@ class Drone:
             roll, pitch, yaw, thr = self.last
             thrust = None
             if stage <= 1:
-                target, thrust = (roll * 0.015 + tr, pitch * 0.015 + tp, yaw * 0.12), thr / 1000
+                roll_sp = clamp(roll / 1000 * MAX_ANGLE + tr, -MAX_ANGLE, MAX_ANGLE)
+                pitch_sp = clamp(pitch / 1000 * MAX_ANGLE + tp, -MAX_ANGLE, MAX_ANGLE)
+                yaw_rate, thrust = yaw / 1000 * MAX_YAW_RATE, thr / 1000
             elif stage == 2:
-                target, thrust = (tr, tp, 0.0), min(thr / 1000, 0.55)
+                roll_sp, pitch_sp, thrust = tr, tp, min(thr / 1000, HOVER)
             elif stage == 3:
-                target, thrust = (tr, tp, 0.0), min(thr / 1000, 0.55 * 0.85)
+                roll_sp, pitch_sp, thrust = tr, tp, min(thr / 1000, HOVER * 0.85)
             else:
                 self.end_session("link lost, failsafe ended", STOP_LINK)
             if thrust is not None:
                 thrust = self.battery(t, thrust, thr)
             if thrust is not None:
                 self.thrust = thrust
-        k = min(1.0, dt * 6)
-        self.roll += (target[0] - self.roll) * k
-        self.pitch += (-target[1] - self.pitch) * k
-        self.yaw = (self.yaw + target[2] * dt + 180) % 360 - 180
+        if self.motor_test and ((t - self.motor_test[3]) & 0xFFFFFFFF) < 0x80000000:
+            self.stop_motor_test("time is up")
+        self.simulate(dt, roll_sp, pitch_sp, yaw_rate)
         self.vbat_rest = max(2.8, self.vbat_rest - dt * (args.drain if self.thrust > 0.1 else 0.0002))
+
+    def simulate(self, dt, roll_sp, pitch_sp, yaw_rate):
+        """Crazyflie conventions inside: pitch + = nose up, yaw + = counter-clockwise."""
+        armed = bool(self.token)
+        flying = armed and self.thrust > HOVER * 0.75
+        steps = max(1, min(50, round(dt / 0.002)))
+        h = dt / steps
+        for _ in range(steps):
+            self.roll.angle_sp = roll_sp
+            self.pitch.angle_sp = -pitch_sp
+            if armed and self.thrust > 0:
+                self.yaw.angle_sp = (self.yaw.angle_sp - yaw_rate * h + 180) % 360 - 180
+            else:                                           # thrust 0: the controller resets
+                self.yaw.angle_sp = self.yaw.angle
+                for ax in (self.roll, self.pitch, self.yaw):
+                    ax.reset_controller()
+            for ax in (self.roll, self.pitch, self.yaw):
+                ax.step(h, flying, args.turbulence)
+        # mixer (power_distribution_stock.c, X frame)
+        if self.motor_test:
+            _, mask, percent, _ = self.motor_test
+            ratio = int(percent * 65535 / 100)
+            self.motors = [ratio if mask & (1 << m) else 0 for m in range(4)]
+        elif armed and self.thrust > 0:
+            thrust = self.thrust * WEB_MAX_THRUST
+            r, p, y = self.roll.out / 2, self.pitch.out / 2, -self.yaw.out
+            self.motors = [int(clamp(v, 0, 65535)) for v in
+                           (thrust - r + p + y, thrust - r - p - y, thrust + r - p + y, thrust + r + p - y)]
+        else:
+            self.motors = [0, 0, 0, 0]
+
+    def sample(self):
+        """One FAST sample (webctrl_core.h, wcFastSample_t)."""
+        off_r, off_p = (0.0, 0.0) if self.token else args.imu_offset
+
+        def cdeg(v):
+            return int(clamp(round(v * 100), -32767, 32767))
+
+        def ddeg(v):
+            return int(clamp(round(v * 10), -32767, 32767))
+        r, p, y = self.roll, self.pitch, self.yaw
+        on = bool(self.token)
+        return struct.pack("<11h5H", cdeg(r.angle + off_r), cdeg(p.angle + off_p), cdeg(y.angle),
+                           cdeg(r.angle_sp if on else 0), cdeg(p.angle_sp if on else 0),
+                           ddeg(r.gyro), ddeg(p.gyro), ddeg(y.gyro),
+                           ddeg(r.rate_sp if on else 0), ddeg(p.rate_sp if on else 0), ddeg(y.rate_sp if on else 0),
+                           *self.motors, int(clamp(self.thrust * WEB_MAX_THRUST, 0, 65535)))
 
     def telemetry(self, c):
         t = now_ms()
@@ -226,12 +388,14 @@ class Drone:
         s2 = S2_BAT_LAND if self.token and self.landing else 0
         if not self.token and 0.5 <= v < BAT_ARM_V:
             s2 |= S2_BAT_NOARM
+        if self.motor_test:
+            s2 |= S2_MOTOR_TEST
         seq, cms = c.echo
         mine = c is self.pilot
         return struct.pack("<BBBBHHIHhhhHHHBBIIbbH", MSG_TELEMETRY, s, self.stage if self.token else 4, c.arm_result,
-                           seq, c.rate, cms, int(v * 1000), int((self.roll + off_r) * 100),
-                           int((self.pitch + off_p) * 100),
-                           int(self.yaw * 100), int(self.thrust * 1000), self.stale if mine else 0, 0,
+                           seq, c.rate, cms, int(v * 1000), int((self.roll.angle + off_r) * 100),
+                           int((self.pitch.angle + off_p) * 100),
+                           int(self.yaw.angle * 100), int(self.thrust * 1000), self.stale if mine else 0, 0,
                            s2, self.stop_reason, t, self.token if mine else 0, self.trim[0], self.trim[1], 0)
 
 
@@ -244,6 +408,7 @@ class Client:
         self.rx = 0
         self.rate = 0
         self.hello = False      # telemetry only after HELLO, as in the firmware
+        self.fast = False       # wants FAST samples
 
 
 drone = Drone()
@@ -318,6 +483,8 @@ async def handle_ws(reader, writer):
         drone.clients.pop(c.id, None)
         if drone.pilot is c:
             drone.pilot, drone.connected = None, False
+        if drone.motor_test and drone.motor_test[0] is c:
+            drone.stop_motor_test("ground station left")
         writer.close()
 
 
@@ -325,6 +492,64 @@ def stalled():
     if not args.stall_every:
         return False
     return (time.monotonic() % args.stall_every) * 1000 < args.stall_ms
+
+
+def param_reply(c, op, req, status, name="", value=0.0, default=float("nan"), flags=0):
+    if drone.stored is not None:
+        flags |= PF_STORED
+    c.writer.write(ws_frame(2, struct.pack("<BBBBffBB", MSG_PARAM_REPLY, op, req, status, value, default, flags, 0)
+                            + name.encode()))
+
+
+def on_param(c, frame):
+    if len(frame) < 8 or frame[1] > PARAM_RESET:
+        return
+    op, req = frame[1], frame[2]
+    value = struct.unpack_from("<f", frame, 4)[0]
+    name = frame[8:].decode("ascii", "replace")
+    if op in (PARAM_SAVE, PARAM_RESET):
+        if drone.busy():
+            param_reply(c, op, req, P_BUSY)
+            return
+        if op == PARAM_RESET:
+            drone.gains = dict(GAINS)
+        drone.stored = None if drone.gains == GAINS else dict(drone.gains)
+        print(f"[drone] gains {'reset' if op == PARAM_RESET else 'stored'}")
+        param_reply(c, op, req, P_OK)
+        return
+    if name in drone.gains:
+        status = P_OK
+        if op == PARAM_WRITE:
+            if drone.motor_test or (drone.token and c is not drone.pilot):
+                status = P_BUSY
+            elif not (math.isfinite(value) and 0 <= value <= 5000):
+                status = P_INVALID
+            else:
+                drone.gains[name] = value
+                print(f"[drone] {name} = {value:.4g}")
+        param_reply(c, op, req, status, name, drone.gains[name], GAINS[name], PF_WRITABLE)
+    elif name in OTHER_PARAMS:
+        param_reply(c, op, req, P_DENIED if op == PARAM_WRITE else P_OK, name, OTHER_PARAMS[name])
+    else:
+        param_reply(c, op, req, P_UNKNOWN, name)
+
+
+def on_motor_test(c, frame):
+    mask, percent, _, duration = struct.unpack_from("<BBBH", frame, 1)
+    if mask > 15 or percent > 100 or (mask and (not percent or not duration)):
+        return
+    status, applied = MOTOR_OK, (0, 0, 0)
+    if mask == 0:
+        drone.stop_motor_test("stop request")
+    elif drone.token:
+        status = MOTOR_BUSY
+    elif not drone.ready():
+        status = MOTOR_NOT_READY
+    else:
+        applied = (mask, min(percent, MOTOR_MAX_PERCENT), min(duration, MOTOR_MAX_MS))
+        drone.motor_test = (c, applied[0], applied[1], (now_ms() + applied[2]) & 0xFFFFFFFF)
+        print(f"[drone] motor test: motors {mask:#x} at {applied[1]} % for {applied[2]} ms")
+    c.writer.write(ws_frame(2, struct.pack("<BBBBHH", MSG_MOTOR_REPLY, applied[0], applied[1], status, applied[2], 0)))
 
 
 def process(c, frame):
@@ -336,11 +561,14 @@ def process(c, frame):
             drone.pilot, drone.connected, c.released, drone.min_offset = c, True, True, None
             print(f"[drone] pilot resumed on client {c.id}")
         c.hello = True
-        info = {"t": "info", "proto": PROTO, "fw": "mock", "device": "Mock drone", "resumed": resumed,
-                "maxAngle": 15, "maxYawRate": 120, "telemetryHz": 20,
+        info = {"t": "info", "proto": 2 if args.legacy else PROTO, "fw": "mock", "device": "Mock drone",
+                "resumed": resumed, "maxAngle": MAX_ANGLE, "maxYawRate": MAX_YAW_RATE, "telemetryHz": 20,
                 "failsafe": {"ok": OK_MS, "hold": HOLD_MS, "descend": DESCEND_MS, "off": OFF_MS, "stale": STALE_MS},
                 "battery": {"land": int(BAT_LAND_V * 1000), "arm": int(BAT_ARM_V * 1000),
                             "landTime": int(BAT_LAND_S * 1000)}, "trimMax": TRIM_MAX}
+        if not args.legacy:
+            info.update({"fastHz": 1000 // FAST_PERIOD_MS,
+                         "motorTest": {"maxPercent": MOTOR_MAX_PERCENT, "maxMs": MOTOR_MAX_MS}})
         c.writer.write(ws_frame(1, json.dumps(info).encode()))
     elif frame[0] == MSG_CONTROL and len(frame) == 16:
         drone.on_control(c, frame, t)
@@ -351,6 +579,14 @@ def process(c, frame):
                 and (r, p) != drone.trim:
             drone.trim = (r, p)
             print(f"[drone] trim roll {r / 10:.1f}, pitch {p / 10:.1f} deg")
+    elif args.legacy:
+        return                          # firmware v0.2 ignores the rest
+    elif frame[0] == MSG_STREAM and len(frame) == 4:
+        c.fast = bool(frame[1] & 1)
+    elif frame[0] == MSG_PARAM:
+        on_param(c, frame)
+    elif frame[0] == MSG_MOTOR_TEST and len(frame) == 8:
+        on_motor_test(c, frame)
 
 
 async def ticker():
@@ -366,6 +602,23 @@ async def ticker():
             rate_t = now
             for c in drone.clients.values():
                 c.rate, c.rx = c.rx, 0
+        fast_clients = [c for c in drone.clients.values() if c.fast and c.hello]
+        if fast_clients:
+            if not drone.fast:
+                drone.fast_t0 = now_ms()
+            drone.fast.append(drone.sample())
+            if len(drone.fast) == FAST_SAMPLES:
+                frame = struct.pack("<BBHIB3x", MSG_FAST, FAST_SAMPLES, drone.fast_seq & 0xFFFF, drone.fast_t0,
+                                    FAST_PERIOD_MS) + b"".join(drone.fast)
+                drone.fast_seq += FAST_SAMPLES
+                drone.fast = []
+                for c in fast_clients:
+                    try:
+                        c.writer.write(ws_frame(2, frame))
+                    except ConnectionError:
+                        pass
+        else:
+            drone.fast = []
         if now - tel >= 0.05:
             tel = now
             for c in list(drone.clients.values()):
@@ -402,6 +655,8 @@ async def main():
     p.add_argument("--drain", type=float, default=0.004)
     p.add_argument("--imu-offset", default="0,0", type=lambda v: tuple(float(x) for x in v.split(",")),
                    help="roll,pitch in degrees")
+    p.add_argument("--turbulence", type=float, default=1.0)
+    p.add_argument("--legacy", action="store_true")
     args = p.parse_args()
     drone.vbat_rest = args.vbat
     sys.stdout.reconfigure(line_buffering=True)

@@ -199,11 +199,14 @@ Every item has to pass before the propellers go on.
    - `IMU sample timer running at 1000 Hz on core 1`
    - `web control ready: http://192.168.43.42/`
    - no reset, no `assert`; the LED blinks in the "alive" pattern
-2. **Motor order:** in `menuconfig` → *motors config*, turn on "Spin motors
-   during startup self-test" (off by default) and flash again. At boot the
-   motors then spin briefly one after the other: M1 front right → M2 rear right
-   → M3 rear left → M4 front left. If a position is wrong, swap the pins in
-   `menuconfig` → *motors config*. Turn the option off again afterwards.
+2. **Motor order:** easiest with the motor test of the
+   [desktop ground station](groundstation.md#motor-test): each motor spins
+   alone, and the picture shows where it sits and which way it has to turn. M1
+   front right, M2 rear right, M3 rear left, M4 front left. Without the ground
+   station: in `menuconfig` → *motors config*, turn on "Spin motors during
+   startup self-test" (off by default) and flash again; at boot the motors spin
+   briefly one after the other in this order. If a position is wrong, swap the
+   pins in `menuconfig` → *motors config*.
 3. **Attitude:** join the Wi-Fi `ESP-DRONE_…` with a phone (password
    `12345678`); the control page opens. Put the drone down flat and keep it
    still until "Calibrating – keep the drone still" disappears and "Arm" can be
@@ -244,7 +247,8 @@ Every item has to pass before the propellers go on.
   (P 5.9) stay at the ESP-Drone defaults. The vendor firmware uses about P 343
   for yaw, but relies on motor desaturation that the ESP-Drone mixer does not
   have. If the E1 Mini oscillates or turns sluggishly around the vertical axis,
-  adjust the parameters `pid_rate.*` and `pid_attitude.*` carefully with
-  cfclient (UDP).
+  adjust the gains `pid_rate.*` and `pid_attitude.*` carefully in the
+  [desktop ground station](groundstation.md#tuning-the-controller) (step test,
+  stored on the drone) or with cfclient (UDP).
 - If it drifts steadily to one side while hovering, correct it with "Trim" on
   the control page (see [webcontrol.md](webcontrol.md#trim)).

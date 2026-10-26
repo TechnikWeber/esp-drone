@@ -13,6 +13,7 @@ From the box to the first hover in seven steps. Details for every step are in
 - A 1S LiPo flight battery with a PH2.0 plug, at most 12 mm thick, see
   [Battery](e1-mini.md#battery). The kit usually ships without one.
 - A computer with Chrome or Edge and a USB **data** cable, and a phone.
+  Optional: a gamepad for the [desktop ground station](groundstation.md).
 
 ## 2. Back up the factory firmware (optional)
 
@@ -52,7 +53,9 @@ Work through the [bench checklist](e1-mini.md#bench-checklist--without-propeller
 The most important points:
 
 - **Motor order and direction:** front left and rear right spin clockwise, the
-  other two counter-clockwise (seen from above).
+  other two counter-clockwise (seen from above). Easiest with the motor test of
+  the [desktop ground station](groundstation.md#motor-test): every motor spins
+  alone, and the picture shows where and which way.
 - **Counter-steering:** hold the drone, throttle down, hold "Arm" for one
   second, throttle to about 20 %. Tilt it right side down: the right motors
   get faster. Nose down: the front motors get faster. If the wrong motors
@@ -81,6 +84,6 @@ after 4 s. With an empty battery it lands by itself.
 | The page does not open | Open `http://192.168.43.42` in the browser; switch off mobile data. |
 | "Arm" stays grey | The message line says why: still calibrating (keep it still), battery empty, or another controller is flying. |
 | The drone drifts | Level on the ground (step 5), then trim in flight. |
-| It oscillates or turns sluggishly | Tune the controller gains, see [First flight](e1-mini.md#first-flight). |
+| It oscillates or turns sluggishly | Tune the controller gains with the [ground station](groundstation.md#tuning-the-controller), see also [First flight](e1-mini.md#first-flight). |
 | The motors stop right after take-off | The battery cannot deliver the current; use a 1S pack for RC models. |
 | The wrong motors react on the bench | Do not fly; check the motor pins and `IMU_ROTATION` in `menuconfig`. |

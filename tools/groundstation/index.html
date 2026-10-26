@@ -1,0 +1,2440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Ground station</title>
+<!--
+  ESP-Drone desktop ground station. Copyright 2026 Philipp Weber.
+  Licensed under the GNU General Public License v3 (see the Drone panel).
+  Runs offline from this one file: open it from disk or via groundstation.py.
+  Protocol: docs/webcontrol.md · Guide: docs/groundstation.md
+-->
+<style>
+:root{
+  --bg:#0a0e13;--panel:#111821;--panel2:#0d131a;--line:#222d3a;--line2:#2c3a4b;--text:#e6edf3;--dim:#8b9bb0;--faint:#5d6b7d;
+  --ok:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#58a6ff;--yellow:#e3b341;
+  --c-roll:#58a6ff;--c-pitch:#f0883e;--c-yaw:#3fb950;--c-sp:#c9d1d9;--c-m1:#58a6ff;--c-m2:#f0883e;--c-m3:#3fb950;--c-m4:#db61a2;
+  --c-thr:#e6edf3;--c-bat:#e3b341;--c-rtt:#39c5cf;--c-delay:#a371f7;--c-drop:#f85149;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif}
+button,select,input{font:inherit;color:inherit}
+button{border:1px solid var(--line2);background:#16202b;border-radius:8px;padding:6px 11px;cursor:pointer}
+button:hover:not(:disabled){border-color:#3d5068;background:#1a2632}
+button:disabled{opacity:.42;cursor:default}
+button.primary{background:#1f4a7a;border-color:#2f6db0}
+button.on{background:#1f3a5a;border-color:var(--accent)}
+select,input[type=number],input[type=text]{background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:5px 7px}
+input[type=range]{accent-color:var(--accent);width:100%}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;vertical-align:-2px}
+.num{font-variant-numeric:tabular-nums}
+.dim{color:var(--dim)}.faint{color:var(--faint)}.okc{color:var(--ok)}.warnc{color:var(--warn)}.badc{color:var(--bad)}
+kbd{display:inline-block;min-width:1.6em;padding:0 5px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;background:var(--panel2);font:12px/1.5 inherit;text-align:center}
+
+#app{position:fixed;inset:0;display:grid;grid-template-rows:auto auto 1fr}
+#bar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--line);white-space:nowrap;min-width:0}
+#bar .brand{font-weight:700;letter-spacing:.2px;margin-right:6px;display:flex;align-items:center;gap:8px}
+#bar .brand svg{width:22px;height:22px}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-variant-numeric:tabular-nums;min-width:0}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--bad);flex:none}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.off{background:var(--faint)}
+.batbar{width:34px;height:12px;border:1px solid var(--dim);border-radius:3px;position:relative;padding:1px}
+.batbar::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:4px;background:var(--dim);border-radius:0 1px 1px 0}
+.batbar i{display:block;height:100%;width:0;background:var(--ok);border-radius:1px}
+#bar .grow{flex:1;min-width:8px}
+#state.armed{background:#4a1214;border-color:var(--bad);color:#ffb3b0;font-weight:700}
+#msg{min-height:30px;padding:5px 12px;text-align:center;font-weight:600;border-bottom:1px solid var(--line);transition:background .2s}
+#msg.info{color:var(--dim)}#msg.warn{background:#3a2a07;color:#ffd479}#msg.bad{background:#4a1214;color:#ffb3b0}#msg.ok{color:var(--ok)}
+
+#main{display:grid;grid-template-columns:292px minmax(420px,1fr) 372px;gap:10px;padding:10px;min-height:0}
+.col{display:flex;flex-direction:column;gap:10px;min-height:0;min-width:0}
+#flightCol{overflow-y:auto;scrollbar-width:thin}
+#flightCol>*{flex:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.card h3{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:8px}
+.card h3 .grow{flex:1}
+
+/* flight column */
+#hz{display:block;width:100%;aspect-ratio:1;border-radius:10px}
+#att{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:6px;font-variant-numeric:tabular-nums}
+#att b{display:block;font-size:17px;font-weight:600}
+#att span{font-size:11px;color:var(--dim)}
+#sticks{display:block;width:100%;height:118px}
+#inputInfo{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-top:4px}
+#armRow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#arm{height:58px;font-weight:700;position:relative;overflow:hidden}
+#arm .fill{position:absolute;inset:0;width:0;background:#2a4d2e}
+#arm span,#arm small,#kill span,#kill small{position:relative;display:block}
+#arm small,#kill small{font-weight:500;font-size:11px;opacity:.8}
+#arm.armed{background:#5a1d1d;border-color:var(--bad)}
+#kill{height:58px;font-weight:800;font-size:18px;background:#b42318;border-color:#ff6b5e;color:#fff;letter-spacing:.5px}
+#kill:hover{background:#c92a1c}
+#trimBox{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}
+#trimPad{display:grid;grid-template-columns:30px 30px 30px;grid-template-rows:26px 26px 26px;gap:2px}
+#trimPad button{padding:0;font-size:12px;border-radius:6px}
+#trimVals{font-size:13px;font-variant-numeric:tabular-nums}
+#trimVals.set b{color:var(--yellow)}
+
+/* plots */
+#plotCard{flex:1;display:flex;flex-direction:column;min-height:0;padding-bottom:6px}
+.tabs{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.tabs button{padding:4px 10px;font-size:13px;border-radius:7px;background:transparent;border-color:transparent;color:var(--dim)}
+.tabs button.on{background:#1b2836;border-color:var(--line2);color:var(--text)}
+#plots{flex:1;display:flex;flex-direction:column;gap:6px;min-height:0;margin-top:6px}
+#plots canvas{flex:1;min-height:0;width:100%;display:block;border-radius:8px;background:var(--panel2)}
+#plotTools{display:flex;gap:6px;align-items:center;margin-left:auto}
+#plotTools button{padding:3px 9px;font-size:12px}
+#plotNote{font-size:12px;color:var(--warn);margin-top:4px;display:none}
+#ticker{height:104px;overflow:hidden;font-size:12px;padding:8px 12px}
+#ticker div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.55}
+
+/* side panels */
+#side{min-height:0}
+#side .tabs{padding:5px;background:var(--panel);border:1px solid var(--line);border-radius:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+#side .tabs button{padding:4px 6px}
+#panels{flex:1;min-height:0;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.panel{display:none}.panel.on{display:block}
+.panel h4{margin:14px 0 6px;font-size:13px;color:var(--dim);font-weight:600}
+.panel h4:first-child{margin-top:0}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.row label{flex:1;color:#c8d1db}
+.row .val{min-width:52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.note{font-size:12px;color:var(--dim);margin:6px 0}
+.warnbox{background:#3a2a07;border:1px solid #6b4f12;color:#ffd479;border-radius:8px;padding:8px 10px;font-size:13px;margin:8px 0}
+.badbox{background:#3d1214;border:1px solid #7a2a2a;color:#ffb3b0;border-radius:8px;padding:8px 10px;font-size:13px;margin:8px 0}
+table{border-collapse:collapse;width:100%}
+td,th{padding:3px 4px;text-align:left}
+th{font-size:12px;color:var(--dim);font-weight:600}
+#padView{display:block;width:100%;height:150px;background:var(--panel2);border-radius:8px}
+#bindTable td{border-top:1px solid var(--line);padding:5px 4px}
+#bindTable td:last-child{text-align:right}
+#bindTable button{padding:2px 8px;font-size:12px}
+#bindTable tr.learn td{background:#1f3a5a}
+.binding{display:inline-block;min-width:34px;padding:1px 7px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);text-align:center;font-size:12px}
+#gainTable input{width:100%;min-width:56px;padding:3px 6px;text-align:right}
+#gainTable td{padding:2px 4px}
+#gainTable th.grp{padding-top:10px;text-align:left;color:var(--dim);border-bottom:1px solid var(--line)}
+#gainTable input.changed{border-color:var(--yellow);color:var(--yellow)}
+#gainTable input.pending{border-color:var(--accent)}
+#gainTable td.ax{color:var(--dim);font-weight:600}
+#motorSvg{display:block;width:100%;max-width:300px;margin:4px auto}
+#motorSvg .motor{cursor:pointer}
+#motorSvg .motor:hover circle.ring{stroke:#8fbfff}
+#motorSvg.disabled .motor{cursor:not-allowed;opacity:.55}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes spinr{to{transform:rotate(-360deg)}}
+#motorSvg .blade{transform-box:fill-box;transform-origin:center}
+#motorSvg .spin.cw .blade{animation:spin .35s linear infinite}
+#motorSvg .spin.ccw .blade{animation:spinr .35s linear infinite}
+#recList .rec{border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin:6px 0;display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center}
+#recList .rec small{color:var(--dim)}
+#recList .rec .btns{display:flex;gap:4px}
+#recList .rec button{padding:2px 8px;font-size:12px}
+#logList{font-size:12px;font-variant-numeric:tabular-nums}
+#logList div{padding:3px 0;border-bottom:1px solid #18212c;display:grid;grid-template-columns:62px 1fr;gap:6px}
+#logList .t{color:var(--faint)}
+.lvl-warn{color:#ffd479}.lvl-bad{color:#ffb3b0}.lvl-ok{color:#7ee787}
+dl{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:4px 0;font-size:13px}
+dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
+
+#overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0a0e13d9;z-index:5}
+#overlay .box{max-width:520px;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:18px 20px;text-align:center}
+#overlay h2{margin:.1em 0 .5em;font-size:20px}
+
+@media (max-height:820px){
+  #hz{max-width:210px;margin:0 auto}
+  #sticks{height:96px}
+}
+@media (max-width:1240px){
+  #app{position:static;min-height:100%}
+  #main{grid-template-columns:270px minmax(380px,1fr)}
+  #flightCol{overflow:visible}
+  #plotCard{flex:none;height:640px}
+  #side{grid-column:1/-1;height:620px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <span class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="1.6"><circle cx="5" cy="5" r="3"/><circle cx="19" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M7.2 7.2l9.6 9.6M16.8 7.2l-9.6 9.6"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="#58a6ff"/></svg><span data-t="title"></span></span>
+    <span class="pill" id="conn"><span class="dot" id="cdot"></span><span id="ctext"></span></span>
+    <span class="pill" id="bat"><span class="batbar"><i id="batFill"></i></span><span id="batText"></span></span>
+    <span class="pill" id="state"></span>
+    <span class="pill" id="timer" title=""><span>⏱</span><span id="timerText" class="num">0:00</span></span>
+    <span class="grow"></span>
+    <span class="pill" id="padPill"><span class="dot" id="padDot"></span><span id="padText"></span></span>
+    <button id="soundBtn" title=""></button>
+    <button id="lang"></button>
+  </div>
+  <div id="msg" class="info"></div>
+  <div id="main">
+    <div class="col" id="flightCol">
+      <div class="card">
+        <h3><span data-t="attitude"></span><span class="grow"></span><span id="hdg" class="num"></span></h3>
+        <canvas id="hz" width="268" height="268"></canvas>
+        <div id="att"><div><b id="aRoll">–</b><span data-t="roll"></span></div><div><b id="aPitch">–</b><span data-t="pitch"></span></div><div><b id="aThr">–</b><span data-t="thrust"></span></div></div>
+      </div>
+      <div id="armRow">
+        <button id="arm" disabled><div class="fill"></div><span data-t="notReady"></span><small id="armHint"></small></button>
+        <button id="kill"><span data-t="kill"></span><small id="killHint"></small></button>
+      </div>
+      <div class="card">
+        <h3><span data-t="pilotInput"></span><span class="grow"></span><span id="ratesPill" class="num"></span></h3>
+        <canvas id="sticks" width="268" height="118"></canvas>
+        <div id="inputInfo"><span id="inLeft"></span><span id="inRight"></span></div>
+      </div>
+      <div class="card">
+        <h3><span data-t="trim"></span><span class="grow"></span><span id="trimHint" class="faint"></span></h3>
+        <div id="trimBox">
+          <div id="trimPad">
+            <span></span><button data-ax="p" data-d="1" data-ta="trimUp">▲</button><span></span>
+            <button data-ax="r" data-d="-1" data-ta="trimLeft">◀</button><button id="trimZero" data-ta="trimZeroHint">0</button><button data-ax="r" data-d="1" data-ta="trimRight">▶</button>
+            <span></span><button data-ax="p" data-d="-1" data-ta="trimDown">▼</button><span></span>
+          </div>
+          <div>
+            <div id="trimVals"><b id="trimR">–</b> <span class="dim" data-t="rollShort"></span> · <b id="trimP">–</b> <span class="dim" data-t="pitchShort"></span></div>
+            <button id="level" style="margin-top:6px;width:100%" data-t="level"></button>
+            <div id="levelHint" class="faint" style="font-size:11px;margin-top:3px;text-align:center"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col" id="center">
+      <div class="card" id="plotCard">
+        <div class="tabs" id="plotTabs">
+          <button data-set="flight" data-t="plotFlight"></button>
+          <button data-set="tuning" data-t="plotTuning"></button>
+          <button data-set="link" data-t="plotLink"></button>
+          <div id="plotTools">
+            <select id="plotWin" title=""><option value="5">5 s</option><option value="10">10 s</option><option value="20">20 s</option><option value="60">60 s</option></select>
+            <button id="freeze" data-t="freeze"></button>
+          </div>
+        </div>
+        <div id="plotNote"></div>
+        <div id="plots"></div>
+      </div>
+      <div class="card" id="ticker"></div>
+    </div>
+
+    <div class="col" id="side">
+      <div class="tabs" id="panelTabs">
+        <button data-panel="pad" data-t="pController"></button>
+        <button data-panel="tune" data-t="pTuning"></button>
+        <button data-panel="motors" data-t="pMotors"></button>
+        <button data-panel="rec" data-t="pRecorder"></button>
+        <button data-panel="log" data-t="pLog"></button>
+        <button data-panel="drone" data-t="pDrone"></button>
+      </div>
+      <div id="panels">
+        <!-- controller -->
+        <div class="panel" id="panel-pad">
+          <h4 data-t="device"></h4>
+          <div class="row"><select id="padSelect" style="flex:1"></select></div>
+          <div class="note" id="padNote"></div>
+          <canvas id="padView" width="340" height="150"></canvas>
+          <h4 data-t="flying"></h4>
+          <div class="row"><label data-t="mode"></label><select id="setMode"><option value="2" data-t="mode2"></option><option value="1" data-t="mode1"></option></select></div>
+          <div class="row"><label data-t="throttleSrc"></label><select id="setThrottle"><option value="spring" data-t="thrSpring"></option><option value="trigger" data-t="thrTrigger"></option><option value="full" data-t="thrFull"></option></select></div>
+          <div class="row"><label data-t="rates"></label><select id="setRates"><option value="0" data-t="rateBeginner"></option><option value="1" data-t="rateNormal"></option><option value="2" data-t="rateSport"></option></select></div>
+          <div class="row"><label data-t="thrMin"></label><input type="range" id="setThrMin" min="0" max="50" step="1" style="width:120px"><span class="val" id="vThrMin"></span></div>
+          <div class="row"><label data-t="thrMax"></label><input type="range" id="setThrMax" min="50" max="100" step="1" style="width:120px"><span class="val" id="vThrMax"></span></div>
+          <div class="row"><label data-t="expoRP"></label><input type="range" id="setExpo" min="0" max="0.8" step="0.05" style="width:120px"><span class="val" id="vExpo"></span></div>
+          <div class="row"><label data-t="expoYaw"></label><input type="range" id="setExpoYaw" min="0" max="0.8" step="0.05" style="width:120px"><span class="val" id="vExpoYaw"></span></div>
+          <div class="row"><label data-t="deadzone"></label><input type="range" id="setDead" min="0" max="0.25" step="0.01" style="width:120px"><span class="val" id="vDead"></span></div>
+          <div class="note" data-t="thrNote"></div>
+          <div class="row" style="justify-content:flex-end"><button id="hoverFit" data-t="hoverFit"></button></div>
+          <h4 data-t="buttons"></h4>
+          <table id="bindTable"></table>
+          <div class="row" style="justify-content:flex-end"><button id="bindReset" data-t="bindReset"></button></div>
+          <h4 data-t="feedback"></h4>
+          <div class="row"><label><input type="checkbox" id="setRumble"> <span data-t="rumble"></span></label><button id="rumbleTest" data-t="test"></button></div>
+          <div class="row"><label><input type="checkbox" id="setSound"> <span data-t="sounds"></span></label></div>
+          <div class="row"><label><input type="checkbox" id="setVoice"> <span data-t="voice"></span></label></div>
+          <div class="row"><label><input type="checkbox" id="setBlurPause"> <span data-t="blurPause"></span></label></div>
+          <div class="row"><label><input type="checkbox" id="setKeyboard"> <span data-t="keyboardFly"></span></label></div>
+          <div class="note" data-h="keyboardHelp"></div>
+        </div>
+
+        <!-- tuning -->
+        <div class="panel" id="panel-tune">
+          <div class="note" data-h="tuneIntro"></div>
+          <div id="tuneOld" class="warnbox" style="display:none" data-t="needsV3"></div>
+          <table id="gainTable"></table>
+          <div class="row"><label><input type="checkbox" id="linkRP"> <span data-t="linkRP"></span></label></div>
+          <div class="row"><label><input type="checkbox" id="liveGains"> <span data-t="liveGains"></span></label></div>
+          <div class="grid2" style="margin-top:8px">
+            <button id="gainApply" class="primary" data-t="apply"></button>
+            <button id="gainRead" data-t="readDrone"></button>
+            <button id="gainSave" data-t="saveDrone"></button>
+            <button id="gainReset" data-t="resetDefaults"></button>
+          </div>
+          <div class="note" id="gainState"></div>
+          <h4 data-t="stepTitle"></h4>
+          <div class="grid2"><button id="stepRollBtn" data-t="stepRoll"></button><button id="stepPitchBtn" data-t="stepPitch"></button></div>
+          <div class="row"><label data-t="stepAmp"></label><input type="range" id="stepDeg" min="2" max="10" step="1" style="width:140px"><span class="val" id="vStepDeg"></span></div>
+          <div class="row"><label><input type="checkbox" id="stepHoldBox"> <span data-t="stepHold"></span></label></div>
+          <div class="note" id="stepHelp"></div>
+          <h4 data-t="tuneHowTitle"></h4>
+          <div class="note" data-h="tuneHow"></div>
+        </div>
+
+        <!-- motor test -->
+        <div class="panel" id="panel-motors">
+          <div class="badbox" data-h="propsWarn"></div>
+          <div id="motorOld" class="warnbox" style="display:none"></div>
+          <div class="row"><label><input type="checkbox" id="propsOff"> <b data-t="propsOff"></b></label></div>
+          <svg id="motorSvg" viewBox="0 0 300 300"></svg>
+          <div class="row"><label data-t="power"></label><input type="range" id="mtPower" min="5" max="30" step="1" style="width:140px"><span class="val" id="vMtPower"></span></div>
+          <div class="row"><label data-t="duration"></label><input type="range" id="mtTime" min="500" max="3000" step="250" style="width:140px"><span class="val" id="vMtTime"></span></div>
+          <div class="grid2"><button id="mtAll" data-t="allMotors"></button><button id="mtStop" data-t="stopMotors"></button></div>
+          <div class="note" id="mtStatus"></div>
+          <div class="note" data-h="motorHow"></div>
+        </div>
+
+        <!-- recorder -->
+        <div class="panel" id="panel-rec">
+          <div class="row"><label><input type="checkbox" id="autoRec"> <span data-t="autoRec"></span></label><button id="recBtn" data-t="recStart"></button></div>
+          <div class="note" data-h="recIntro"></div>
+          <div id="recList"></div>
+        </div>
+
+        <!-- log -->
+        <div class="panel" id="panel-log">
+          <div class="row"><span class="dim" style="flex:1" data-t="logIntro"></span><button id="logSave" data-t="save"></button><button id="logClear" data-t="clear"></button></div>
+          <div id="logList"></div>
+        </div>
+
+        <!-- drone -->
+        <div class="panel" id="panel-drone">
+          <h4 data-t="connection"></h4>
+          <div class="row"><input type="text" id="addr" spellcheck="false" style="flex:1"><button id="addrGo" data-t="connect"></button></div>
+          <dl id="linkStats"></dl>
+          <h4 data-t="droneInfo"></h4>
+          <dl id="droneInfo"></dl>
+          <h4 data-t="about"></h4>
+          <div class="note" data-t="license"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="overlay"><div class="box" id="overlayBox"></div></div>
+<script>
+"use strict";
+// ===== protocol (docs/webcontrol.md) =========================================
+const PROTO = 3;
+const MSG = { CONTROL: 0x01, HELLO: 0x02, TRIM: 0x03, PARAM: 0x04, STREAM: 0x05, MOTOR_TEST: 0x06,
+  TELEMETRY: 0x81, FAST: 0x82, PARAM_REPLY: 0x84, MOTOR_REPLY: 0x86 };
+const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
+const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
+const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4;
+const STOP_BATTERY = 5;
+const P_READ = 0, P_WRITE = 1, P_SAVE = 2, P_RESET = 3;
+const PF_WRITABLE = 1, PF_STORED = 2;
+const TELEMETRY_LEN = 40, FAST_HDR = 12, FAST_SAMPLE = 32;
+const SEND_MS = 20, TEL_WARN_MS = 600, TEL_DEAD_MS = 2500;
+const ARM_HOLD_MS = 1000, LEVEL_HOLD_MS = 1500, TRIM_STEP = 5;
+const LOOPS = ["rate", "attitude"], AXES = ["roll", "pitch", "yaw"], TERMS = ["kp", "ki", "kd"];
+const GAIN_NAMES = [];
+for (const l of LOOPS) for (const a of AXES) for (const k of TERMS) GAIN_NAMES.push(`pid_${l}.${a}_${k}`);
+// Motor layout of ESP-Drone (power_distribution_stock.c, X frame), seen from above
+const MOTORS = [
+  { x: 222, y: 78, dir: "ccw" },   // M1 front right
+  { x: 222, y: 222, dir: "cw" },   // M2 rear right
+  { x: 78, y: 222, dir: "ccw" },   // M3 rear left
+  { x: 78, y: 78, dir: "cw" },     // M4 front left
+];
+
+// ===== texts =================================================================
+// English by default, German for German systems; switchable in the bar.
+// Values are strings, arrays or functions; data-h texts may contain markup.
+const TEXT = {
+  en: {
+    title: "Ground station", otherLang: "DE",
+    connecting: "Connecting…", disconnected: "No connection", poorLink: "Poor link", rttMs: (ms) => `${ms} ms`,
+    batteryNone: "Battery –", disarmed: "Disarmed", armedState: "ARMED", otherPilot: "Other pilot", notReady: "Not ready",
+    motorTestState: "Motor test", attitude: "Attitude", roll: "Roll", pitch: "Pitch", yaw: "Yaw",
+    pitchUp: "Pitch (+ nose up)", thrust: "Thrust",
+    rollShort: "R", pitchShort: "P", heading: (d) => `heading ${d}°`,
+    pilotInput: "Pilot input", arm: "Arm", disarm: "Disarm", inUse: "In use", batteryEmpty: "Battery empty",
+    kill: "STOP", killSent: "STOP sent – motors off", holdHint: (b) => `hold ${b} 1 s`, pressHint: (b) => `${b}`,
+    trim: "Trim", trimUp: "Trim forward", trimDown: "Trim backward", trimLeft: "Trim left", trimRight: "Trim right",
+    trimZeroHint: "Trim to 0 (hold)", trimLimit: "Trim at its limit (±5°)", trimReset: "Trim reset to 0",
+    trimPadHint: () => "D-pad", levelHint: (b) => `or hold ${b} on the gamepad`,
+    level: "Level on the ground", levelBusy: "Measuring… keep still", levelNotNow: "Level only on the ground, disarmed",
+    levelNoData: "No attitude data – try again", levelMoved: "The drone moved – put it down still and try again",
+    levelTooFar: "Tilted more than 5° – is the surface level?", levelDone: (r, p) => `Levelled: trim R ${r} · P ${p}`,
+    plotFlight: "Flight", plotTuning: "Tuning", plotLink: "Link", freeze: "Pause", live: "Live",
+    plotNoFast: "Setpoints, rates and motor outputs need firmware v0.3.0 or newer; this drone only sends the attitude.",
+    pRoll: "Roll °", pPitch: "Pitch ° (+ nose up)", pThrust: "Thrust and motors %", pBattery: "Battery V",
+    pRollRate: "Roll rate °/s", pPitchRate: "Pitch rate °/s (+ nose up)", pYawRate: "Yaw rate °/s (+ left)",
+    pMotors: "Motors %", pRtt: "Round trip ms", pDelay: "Command delay on the drone ms", pCmds: "Commands per second",
+    sSetpoint: "setpoint", sActual: "actual", sGyro: "gyro", sThrust: "thrust", sStick: "stick", sVolt: "voltage",
+    sLand: "landing", sArmMin: "arm min.", sRtt: "round trip", sDelay: "extra delay", sRx: "received",
+    sDropped: "late, dropped",
+    pController: "Controller", pTuning: "Tuning", pMotors: "Motors", pRecorder: "Recorder", pLog: "Log", pDrone: "Drone",
+    device: "Input device", flying: "Flying", mode: "Stick mode", mode2: "Mode 2 (throttle left)",
+    mode1: "Mode 1 (throttle right)", throttleSrc: "Throttle", thrSpring: "Stick up (centre = motors off)",
+    thrTrigger: "Right trigger", thrFull: "Full stick travel (RC transmitter)", rates: "Rates",
+    rateBeginner: "Beginner", rateNormal: "Normal", rateSport: "Sport",
+    ratesPill: (name, deg) => `${name} · ${deg}°`,
+    thrMin: "Lowest thrust", thrMax: "Highest thrust", expoRP: "Expo roll / pitch", expoYaw: "Expo yaw",
+    thrNote: "The throttle starts at the lowest thrust as soon as the stick leaves the bottom (or the centre) and " +
+      "reaches the highest thrust at full stick. The drone should hover around the middle of the travel.",
+    deadzone: "Dead zone", buttons: "Buttons", bindReset: "Default buttons", feedback: "Feedback",
+    rumble: "Vibration", test: "Test", sounds: "Warning tones", voice: "Voice announcements",
+    blurPause: "Level out when this window loses focus", keyboardFly: "Fly with the keyboard (bench tests)",
+    keyboardHelp: "Keyboard: <kbd>Esc</kbd> STOP while this window flies or runs a motor test. Flying: <kbd>W</kbd>/<kbd>S</kbd> throttle, " +
+      "<kbd>A</kbd>/<kbd>D</kbd> yaw, arrow keys pitch and roll, hold <kbd>Enter</kbd> 1 s to arm, " +
+      "<kbd>Backspace</kbd> disarm.",
+    noPad: "No gamepad – connect one and press a button", keyboard: "Keyboard",
+    padStandard: "Standard layout: works without setup.",
+    padCustom: "Unknown layout: assign the sticks and buttons below (Change → move or press).",
+    padNone: "Connect a gamepad (USB or Bluetooth) and press any button on it: browsers only show a gamepad " +
+      "after a button press. PlayStation 3/4/5, Xbox, Switch Pro and most others work.",
+    aRoll: "Roll (stick right)", aPitch: "Pitch (stick up)", aYaw: "Yaw (stick right)", aThrottle: "Throttle (stick up)",
+    aArm: "Arm (hold 1 s) / disarm", aStop: "STOP", aTrimUp: "Trim forward", aTrimDown: "Trim backward",
+    aTrimLeft: "Trim left", aTrimRight: "Trim right", aRates: "Rates (cycle)", aLevel: "Level (hold)",
+    aMarker: "Marker in recording", aStepRoll: "Step test roll", aStepPitch: "Step test pitch",
+    change: "Change", unbound: "–", learnButton: "Press a button…",
+    learnAxis: (dir) => `Move the stick ${dir}…`, dirRight: "to the right", dirUp: "up",
+    learnDone: (a, b) => `${a}: ${b}`, learnTimeout: "Nothing detected – try again", axisName: (i) => `axis ${i}`,
+    buttonName: (i) => `button ${i}`,
+    padConnectedMsg: (n) => `Gamepad: ${n}`, padLostMsg: "Gamepad lost – the drone levels out and descends",
+    padNeeded: "Press a button on the gamepad to take over",
+    focusLost: "Window not in focus – the drone levels out. Click here to fly on.",
+    pageHidden: "Window hidden – the drone levels out and descends",
+    needsV3: "Changing gains needs firmware v0.3.0 or newer.", linkRP: "Pitch follows roll",
+    liveGains: "Send changes at once", apply: "Apply", readDrone: "Read from drone", saveDrone: "Save on drone",
+    stepTitle: "Step test", stepRoll: "Roll", stepPitch: "Pitch", stepAmp: "Size", stepHold: "Hold the plots afterwards",
+    stepHelp: (r, p) => `While hovering: the drone tilts to one side and back (0.3 s each), the plots then hold the ` +
+      `response and show the previous test in grey for comparison. Any stick movement cancels it. Gamepad: ${r} roll, ${p} pitch.`,
+    stepNotFlying: "Step test only in flight (hover first)", evStep: (a, d) => `Step test ${a} ±${d}°`,
+    stepHeld: "Step response held – press Live to go on", sPrev: "previous test",
+    hoverEst: (p) => `hover ≈ ${p} %`, hoverFit: "Hover at mid-stick", hoverNone: "Hover for a few seconds first",
+    hoverDone: (lo, hi) => `Throttle: lowest ${lo} %, highest ${hi} %: hovering is now at mid-stick`,
+    resetDefaults: "Firmware defaults", reallyReset: "Click again: reset all gains",
+    gRate: "Rate (inner loop)", gAtt: "Attitude (outer loop)", gAxis: ["Roll", "Pitch", "Yaw"],
+    gainStored: "The drone uses gains stored on it.", gainDefault: "The drone uses its firmware defaults.",
+    gainPending: (n) => `${n} change(s) not sent yet.`, gainsSaved: "Gains stored on the drone",
+    gainsReset: "Gains back to the firmware defaults", gainSet: (n, v) => `${n} = ${v}`,
+    paramStatus: ["OK", "unknown parameter", "not changeable", "not now – someone flies, or saving needs the drone on the ground",
+      "value out of range", "flash error"],
+    tuneIntro: "Controller gains of the drone, live. Fly with the gamepad and watch the <b>Tuning</b> plots: " +
+      "dashed is what the controller wants, solid is what the drone does.",
+    tuneHowTitle: "How to tune",
+    tuneHow: "1. Hover in a calm room, then tilt briefly with the right stick.<br>" +
+      "2. <b>Rate P</b>: raise in steps of 10 % until the gyro line overshoots or buzzes, then go back 20 %.<br>" +
+      "3. <b>Rate D</b> damps the overshoot; too much makes the motors hot and noisy.<br>" +
+      "4. <b>Attitude P</b> sets how fast the drone follows the stick; <b>I</b> removes a slow drift.<br>" +
+      "5. Keep the values with <b>Save on drone</b> (on the ground). Firmware defaults bring everything back.",
+    propsWarn: "<b>Propellers off!</b> The motor test spins the motors without the flight controller. " +
+      "With propellers on, the drone can jump or flip.",
+    propsOff: "The propellers are removed", power: "Power", duration: "Duration", allMotors: "All motors",
+    stopMotors: "Stop", motorNames: ["M1 front right", "M2 rear right", "M3 rear left", "M4 front left"],
+    cw: "clockwise", ccw: "counter-clockwise", front: "FRONT", mtNeedProps: "Tick “The propellers are removed” first",
+    mtRunning: (m, p) => `Motor test: ${m} at ${p} %`, mtStopped: "Motor test stopped",
+    mtStatus: ["running", "the drone is not ready yet (calibrating – keep it still)",
+      "not possible while armed or while someone flies", "switched off in the firmware configuration"],
+    mtNeedsV3: "The motor test needs firmware v0.3.0 or newer.",
+    mtDisabled: "The motor test is switched off in this firmware (menuconfig → ESPDrone web control).",
+    motorHow: "Click a motor: it has to spin at the position shown and in the direction of the arrow. " +
+      "Wrong position: the motor pins are swapped. Wrong direction: swap the two wires of that motor " +
+      "(brushed motors) or the propeller type. Every test stops after the set time, on STOP and when this " +
+      "page closes.",
+    autoRec: "Record every flight", recStart: "Record now", recStop: "Stop recording",
+    recIntro: "Recordings hold everything the plots show (100 Hz with firmware v0.3.0) plus your stick input. " +
+      "They live in this window only: save the CSV before you close it.",
+    recNone: "No recordings yet.", recTitle: (n, time) => `Flight ${n} · ${time}`,
+    recInfo: (dur, rows, vmin) => `${dur} · ${rows} rows` + (vmin ? ` · battery down to ${vmin} V` : ""),
+    csv: "CSV", del: "Delete", recRunning: "recording…", unsaved: "Recordings not saved",
+    logIntro: "Everything that happened since this window opened.", save: "Save", clear: "Clear",
+    connection: "Connection", connect: "Connect", droneInfo: "Drone", about: "About",
+    lStatus: "Status", lRtt: "Round trip", lRates: "Sent / received", lStale: "Late commands", lFast: "Samples",
+    lFirmware: "Firmware", lDevice: "Board", lProtocol: "Protocol", lUptime: "Running for", lLimits: "Stick limits",
+    lFailsafe: "Failsafe", lBattery: "Battery", lMotorTest: "Motor test", lGains: "Gains",
+    connectedTo: (a) => `connected to ${a}`, notConnected: "not connected",
+    fsInfo: (f) => `hold ${f.hold} ms · level ${f.descend} ms · off ${f.off} ms`,
+    batInfo: (b) => b.land ? `lands below ${(b.land / 1000).toFixed(2)} V · arm from ${(b.arm / 1000).toFixed(2)} V` : "no automatic landing",
+    limitsInfo: (j) => `${j.maxAngle}° · ${j.maxYawRate}°/s`,
+    mtInfo: (m) => m && m.maxPercent ? `up to ${m.maxPercent} % · ${m.maxMs / 1000} s` : "off",
+    gainsInfo: (s) => s ? "stored on the drone" : "firmware defaults",
+    stages: ["", "Short gap – holding the last command", "Link lost – the drone levels out",
+      "Link lost – the drone descends", "Motors off"],
+    armReasons: ["", "Drone not ready (self test or calibration – keep it still)", "Throttle all the way down to arm",
+      "Battery too low", "Another controller is active (app, cfclient, phone)", "Drone is upside down",
+      "Release first, then arm again", "Motor test running"],
+    stopReasons: ["", "Disarmed", "STOP – motors off", "Link lost – motors off, arm again",
+      "Drone was upside down – motors off", "Battery empty – landed, please charge", "Disarmed by another controller"],
+    msgPoorLink: "Poor link – the drone takes over shortly", msgNoLink: (a) => `No connection – looking for the drone at ${a}… ` +
+      "Is this computer in the drone's Wi-Fi?",
+    msgBatLand: "Battery empty – the drone is landing. Throttle down after touchdown",
+    msgTumbled: "Drone is upside down", msgBatLow: "Battery low – land soon", msgBatEmpty: "Battery empty – please charge",
+    msgOther: "Someone else is flying – you see the telemetry", msgCalibrating: "Calibrating – keep the drone still",
+    msgMotorTest: "Motor test running", msgFlying: "Flying", msgIdle: (b) => `Throttle down, then hold ${b} for 1 s to arm`,
+    msgThrottleDown: "Throttle down to disarm – or press STOP",
+    msgHttps: "This page was opened from the internet (https), and browsers do not let such pages reach the drone. " +
+      "Save the page (Ctrl+S) or download it, then open the file from your computer.",
+    evConnected: (a) => `Connected to ${a}`, evDisconnected: "Connection lost", evInfo: (j) => `${j.device} · firmware ${j.fw} · protocol ${j.proto}`,
+    evArmed: "Armed", evStopped: (r) => `Stopped: ${r}`, evStage: (s) => s, evLinkBack: "Link back, pilot in control",
+    evBatLow: "Battery low", evBatLand: "Forced landing: battery empty", evPad: (n) => `Gamepad connected: ${n}`,
+    evPadLost: "Gamepad disconnected", evKill: "STOP pressed", evTrim: (r, p) => `Trim R ${r} · P ${p}`,
+    evRates: (n) => `Rates: ${n}`, evMarker: (n) => `Marker ${n}`, evRecSaved: (n) => `Recording ${n} saved as CSV`,
+    evPause: (why) => `Commands paused: ${why}`, evResume: "Commands resumed",
+    vArmed: "Armed", vDisarmed: "Disarmed", vLinkLost: "Link lost", vLinkBack: "Link back", vBatLow: "Battery low",
+    vBatLand: "Battery empty. Landing.", vPadLost: "Gamepad lost", vStop: "Stop", vRates: (n) => n,
+    soundOn: "Sound on (click to mute)", soundOff: "Sound off", soundBlocked: "Click anywhere to allow sound",
+    license: "ESP-Drone ground station · Copyright © 2026 Philipp Weber. Free software under the GNU General Public " +
+      "License version 3, WITHOUT ANY WARRANTY. License text: https://www.gnu.org/licenses/gpl-3.0.html · " +
+      "Source code: the project's repository. Propellers can injure: fly only where it is safe.",
+  },
+  de: {
+    title: "Bodenstation", otherLang: "EN",
+    connecting: "Verbinde…", disconnected: "Keine Verbindung", poorLink: "Gestört", rttMs: (ms) => `${ms} ms`,
+    batteryNone: "Akku –", disarmed: "Gesperrt", armedState: "SCHARF", otherPilot: "Fremdsteuerung", notReady: "Nicht bereit",
+    motorTestState: "Motortest", attitude: "Lage", roll: "Rollen", pitch: "Nicken", yaw: "Gieren",
+    pitchUp: "Nicken (+ Nase hoch)", thrust: "Schub",
+    rollShort: "R", pitchShort: "N", heading: (d) => `Kurs ${d}°`,
+    pilotInput: "Steuereingaben", arm: "Scharfschalten", disarm: "Entschärfen", inUse: "Belegt", batteryEmpty: "Akku leer",
+    kill: "NOT-AUS", killSent: "NOT-AUS gesendet – Motoren aus", holdHint: (b) => `${b} 1 s halten`, pressHint: (b) => `${b}`,
+    trim: "Trimmung", trimUp: "Trimm vorwärts", trimDown: "Trimm rückwärts", trimLeft: "Trimm links", trimRight: "Trimm rechts",
+    trimZeroHint: "Trimmung auf 0 (halten)", trimLimit: "Trimmung am Anschlag (±5°)", trimReset: "Trimmung auf 0 gesetzt",
+    trimPadHint: () => "Steuerkreuz", levelHint: (b) => `oder am Gamepad ${b} halten`,
+    level: "Am Boden nivellieren", levelBusy: "Misst… nicht bewegen", levelNotNow: "Nivellieren nur am Boden und entschärft",
+    levelNoData: "Keine Lagedaten – bitte noch einmal", levelMoved: "Drohne hat sich bewegt – still hinstellen und nochmal",
+    levelTooFar: "Mehr als 5° schief – ist die Fläche eben?", levelDone: (r, p) => `Nivelliert: Trimmung R ${r} · N ${p}`,
+    plotFlight: "Flug", plotTuning: "Tuning", plotLink: "Verbindung", freeze: "Anhalten", live: "Live",
+    plotNoFast: "Sollwerte, Drehraten und Motorwerte brauchen Firmware v0.3.0 oder neuer; diese Drohne sendet nur die Lage.",
+    pRoll: "Rollen °", pPitch: "Nicken ° (+ Nase hoch)", pThrust: "Schub und Motoren %", pBattery: "Akku V",
+    pRollRate: "Rollrate °/s", pPitchRate: "Nickrate °/s (+ Nase hoch)", pYawRate: "Gierrate °/s (+ links)",
+    pMotors: "Motoren %", pRtt: "Umlaufzeit ms", pDelay: "Befehlsverzögerung an der Drohne ms", pCmds: "Befehle pro Sekunde",
+    sSetpoint: "Soll", sActual: "Ist", sGyro: "Gyro", sThrust: "Schub", sStick: "Stick", sVolt: "Spannung",
+    sLand: "Landung", sArmMin: "Scharf ab", sRtt: "Umlauf", sDelay: "Zusatzverzögerung", sRx: "empfangen",
+    sDropped: "zu spät, verworfen",
+    pController: "Controller", pTuning: "Tuning", pMotors: "Motoren", pRecorder: "Rekorder", pLog: "Protokoll", pDrone: "Drohne",
+    device: "Eingabegerät", flying: "Fliegen", mode: "Stick-Modus", mode2: "Mode 2 (Gas links)",
+    mode1: "Mode 1 (Gas rechts)", throttleSrc: "Gas", thrSpring: "Stick nach oben (Mitte = Motoren aus)",
+    thrTrigger: "Rechter Trigger", thrFull: "Ganzer Stickweg (RC-Sender)", rates: "Raten",
+    rateBeginner: "Anfänger", rateNormal: "Normal", rateSport: "Sport",
+    ratesPill: (name, deg) => `${name} · ${deg}°`,
+    thrMin: "Kleinster Schub", thrMax: "Größter Schub", expoRP: "Expo Rollen / Nicken", expoYaw: "Expo Gieren",
+    thrNote: "Das Gas beginnt mit dem kleinsten Schub, sobald der Stick unten (oder die Mitte) verlässt, und erreicht " +
+      "bei Vollausschlag den größten. Die Drohne sollte etwa in der Mitte des Stickwegs schweben.",
+    deadzone: "Totzone", buttons: "Tasten", bindReset: "Standardbelegung", feedback: "Rückmeldung",
+    rumble: "Vibration", test: "Test", sounds: "Warntöne", voice: "Sprachansagen",
+    blurPause: "Drohne ausrichten, wenn dieses Fenster den Fokus verliert", keyboardFly: "Mit der Tastatur fliegen (Prüfstand)",
+    keyboardHelp: "Tastatur: <kbd>Esc</kbd> NOT-AUS, solange dieses Fenster fliegt oder einen Motortest fährt. Fliegen: <kbd>W</kbd>/<kbd>S</kbd> Gas, " +
+      "<kbd>A</kbd>/<kbd>D</kbd> Gieren, Pfeiltasten Nicken und Rollen, <kbd>Enter</kbd> 1 s halten zum Scharfschalten, " +
+      "<kbd>Rück</kbd> entschärfen.",
+    noPad: "Kein Gamepad – anschließen und eine Taste drücken", keyboard: "Tastatur",
+    padStandard: "Standardbelegung: funktioniert ohne Einrichtung.",
+    padCustom: "Unbekannte Belegung: Sticks und Tasten unten zuweisen (Ändern → bewegen oder drücken).",
+    padNone: "Gamepad anschließen (USB oder Bluetooth) und eine Taste drücken: Browser zeigen ein Gamepad erst " +
+      "nach einem Tastendruck. PlayStation 3/4/5, Xbox, Switch Pro und die meisten anderen funktionieren.",
+    aRoll: "Rollen (Stick rechts)", aPitch: "Nicken (Stick hoch)", aYaw: "Gieren (Stick rechts)", aThrottle: "Gas (Stick hoch)",
+    aArm: "Scharf (1 s halten) / entschärfen", aStop: "NOT-AUS", aTrimUp: "Trimm vorwärts", aTrimDown: "Trimm rückwärts",
+    aTrimLeft: "Trimm links", aTrimRight: "Trimm rechts", aRates: "Raten (umschalten)", aLevel: "Nivellieren (halten)",
+    aMarker: "Markierung in der Aufzeichnung", aStepRoll: "Sprungtest Rollen", aStepPitch: "Sprungtest Nicken",
+    change: "Ändern", unbound: "–", learnButton: "Taste drücken…",
+    learnAxis: (dir) => `Stick ${dir} bewegen…`, dirRight: "nach rechts", dirUp: "nach oben",
+    learnDone: (a, b) => `${a}: ${b}`, learnTimeout: "Nichts erkannt – bitte noch einmal", axisName: (i) => `Achse ${i}`,
+    buttonName: (i) => `Taste ${i}`,
+    padConnectedMsg: (n) => `Gamepad: ${n}`, padLostMsg: "Gamepad weg – die Drohne richtet sich aus und sinkt",
+    padNeeded: "Eine Taste am Gamepad drücken, um zu übernehmen",
+    focusLost: "Fenster nicht im Fokus – die Drohne richtet sich aus. Hier klicken, um weiterzufliegen.",
+    pageHidden: "Fenster verdeckt – die Drohne richtet sich aus und sinkt",
+    needsV3: "Reglerwerte ändern braucht Firmware v0.3.0 oder neuer.", linkRP: "Nicken folgt Rollen",
+    liveGains: "Änderungen sofort senden", apply: "Übernehmen", readDrone: "Von der Drohne lesen", saveDrone: "Auf der Drohne speichern",
+    stepTitle: "Sprungtest", stepRoll: "Rollen", stepPitch: "Nicken", stepAmp: "Größe", stepHold: "Kurven danach anhalten",
+    stepHelp: (r, p) => `Im Schwebeflug: Die Drohne kippt kurz zur einen Seite und zurück (je 0,3 s), danach halten die ` +
+      `Kurven die Antwort fest und zeigen den vorigen Test grau zum Vergleich. Jede Stickbewegung bricht ab. Gamepad: ${r} Rollen, ${p} Nicken.`,
+    stepNotFlying: "Sprungtest nur im Flug (erst schweben)", evStep: (a, d) => `Sprungtest ${a} ±${d}°`,
+    stepHeld: "Sprungantwort angehalten – mit Live geht es weiter", sPrev: "voriger Test",
+    hoverEst: (p) => `Schweben ≈ ${p} %`, hoverFit: "Schweben in Stick-Mitte", hoverNone: "Erst ein paar Sekunden schweben",
+    hoverDone: (lo, hi) => `Gas: kleinster Schub ${lo} %, größter ${hi} %: Schweben liegt jetzt in der Stick-Mitte`,
+    resetDefaults: "Firmware-Standard", reallyReset: "Nochmal klicken: alle Werte zurücksetzen",
+    gRate: "Drehrate (innen)", gAtt: "Lage (außen)", gAxis: ["Rollen", "Nicken", "Gieren"],
+    gainStored: "Die Drohne nutzt auf ihr gespeicherte Werte.", gainDefault: "Die Drohne nutzt ihre Firmware-Standardwerte.",
+    gainPending: (n) => `${n} Änderung(en) noch nicht gesendet.`, gainsSaved: "Reglerwerte auf der Drohne gespeichert",
+    gainsReset: "Reglerwerte auf Firmware-Standard zurückgesetzt", gainSet: (n, v) => `${n} = ${v}`,
+    paramStatus: ["OK", "unbekannter Parameter", "nicht änderbar", "gerade nicht – jemand fliegt, oder Speichern geht nur am Boden",
+      "Wert außerhalb des Bereichs", "Flash-Fehler"],
+    tuneIntro: "Die Reglerwerte der Drohne, live. Mit dem Gamepad fliegen und die <b>Tuning</b>-Kurven ansehen: " +
+      "gestrichelt ist, was der Regler will, durchgezogen, was die Drohne tut.",
+    tuneHowTitle: "So wird getunt",
+    tuneHow: "1. In einem ruhigen Raum schweben, dann mit dem rechten Stick kurz kippen.<br>" +
+      "2. <b>Rate P</b> in 10-%-Schritten erhöhen, bis die Gyro-Kurve überschwingt oder zittert, dann 20 % zurück.<br>" +
+      "3. <b>Rate D</b> dämpft das Überschwingen; zu viel macht die Motoren heiß und laut.<br>" +
+      "4. <b>Lage P</b> bestimmt, wie schnell die Drohne dem Stick folgt; <b>I</b> beseitigt langsames Wegdriften.<br>" +
+      "5. Mit <b>Auf der Drohne speichern</b> behalten (am Boden). Firmware-Standard stellt alles zurück.",
+    propsWarn: "<b>Propeller ab!</b> Der Motortest dreht die Motoren ohne Flugregler. " +
+      "Mit Propellern kann die Drohne springen oder sich überschlagen.",
+    propsOff: "Die Propeller sind abgenommen", power: "Leistung", duration: "Dauer", allMotors: "Alle Motoren",
+    stopMotors: "Stopp", motorNames: ["M1 vorne rechts", "M2 hinten rechts", "M3 hinten links", "M4 vorne links"],
+    cw: "im Uhrzeigersinn", ccw: "gegen den Uhrzeigersinn", front: "VORNE", mtNeedProps: "Erst „Die Propeller sind abgenommen“ ankreuzen",
+    mtRunning: (m, p) => `Motortest: ${m} mit ${p} %`, mtStopped: "Motortest beendet",
+    mtStatus: ["läuft", "die Drohne ist noch nicht bereit (kalibriert – still hinstellen)",
+      "nicht möglich, solange sie scharf ist oder jemand fliegt", "in der Firmware-Konfiguration abgeschaltet"],
+    mtNeedsV3: "Der Motortest braucht Firmware v0.3.0 oder neuer.",
+    mtDisabled: "Der Motortest ist in dieser Firmware abgeschaltet (menuconfig → ESPDrone web control).",
+    motorHow: "Einen Motor anklicken: Er muss an der gezeigten Stelle und in Pfeilrichtung drehen. " +
+      "Falsche Stelle: Die Motor-Pins sind vertauscht. Falsche Richtung: die beiden Drähte des Motors tauschen " +
+      "(Bürstenmotoren) oder den Propellertyp. Jeder Test endet nach der eingestellten Zeit, bei NOT-AUS und wenn " +
+      "diese Seite schließt.",
+    autoRec: "Jeden Flug aufzeichnen", recStart: "Jetzt aufzeichnen", recStop: "Aufzeichnung beenden",
+    recIntro: "Aufzeichnungen enthalten alles, was die Kurven zeigen (100 Hz ab Firmware v0.3.0), dazu deine Steuereingaben. " +
+      "Sie leben nur in diesem Fenster: Vor dem Schließen als CSV speichern.",
+    recNone: "Noch keine Aufzeichnungen.", recTitle: (n, time) => `Flug ${n} · ${time}`,
+    recInfo: (dur, rows, vmin) => `${dur} · ${rows} Zeilen` + (vmin ? ` · Akku bis ${vmin} V` : ""),
+    csv: "CSV", del: "Löschen", recRunning: "zeichnet auf…", unsaved: "Aufzeichnungen nicht gespeichert",
+    logIntro: "Alles, was seit dem Öffnen dieses Fensters passiert ist.", save: "Speichern", clear: "Leeren",
+    connection: "Verbindung", connect: "Verbinden", droneInfo: "Drohne", about: "Über",
+    lStatus: "Status", lRtt: "Umlaufzeit", lRates: "Gesendet / empfangen", lStale: "Verspätete Befehle", lFast: "Messwerte",
+    lFirmware: "Firmware", lDevice: "Platine", lProtocol: "Protokoll", lUptime: "Läuft seit", lLimits: "Stick-Grenzen",
+    lFailsafe: "Failsafe", lBattery: "Akku", lMotorTest: "Motortest", lGains: "Reglerwerte",
+    connectedTo: (a) => `verbunden mit ${a}`, notConnected: "nicht verbunden",
+    fsInfo: (f) => `halten ${f.hold} ms · ausrichten ${f.descend} ms · aus ${f.off} ms`,
+    batInfo: (b) => b.land ? `landet unter ${(b.land / 1000).toFixed(2)} V · scharf ab ${(b.arm / 1000).toFixed(2)} V` : "keine automatische Landung",
+    limitsInfo: (j) => `${j.maxAngle}° · ${j.maxYawRate}°/s`,
+    mtInfo: (m) => m && m.maxPercent ? `bis ${m.maxPercent} % · ${m.maxMs / 1000} s` : "aus",
+    gainsInfo: (s) => s ? "auf der Drohne gespeichert" : "Firmware-Standard",
+    stages: ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich aus",
+      "Verbindung weg – Drohne sinkt ab", "Motoren aus"],
+    armReasons: ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, still hinstellen)", "Gas ganz runter zum Scharfschalten",
+      "Akku zu schwach", "Andere Steuerung aktiv (App/cfclient/Handy)", "Drohne liegt auf dem Kopf",
+      "Erst loslassen, dann neu scharfschalten", "Motortest läuft"],
+    stopReasons: ["", "Entschärft", "NOT-AUS – Motoren aus", "Verbindung verloren – Motoren aus, neu scharfschalten",
+      "Drohne lag auf dem Kopf – Motoren aus", "Akku leer – gelandet, bitte laden", "Andere Steuerung hat entschärft"],
+    msgPoorLink: "Verbindung gestört – die Drohne übernimmt gleich selbst",
+    msgNoLink: (a) => `Keine Verbindung – suche die Drohne unter ${a}… Ist dieser Computer im WLAN der Drohne?`,
+    msgBatLand: "Akku leer – die Drohne landet. Nach dem Aufsetzen Gas ganz runter",
+    msgTumbled: "Drohne liegt auf dem Kopf", msgBatLow: "Akku schwach – bitte bald landen", msgBatEmpty: "Akku leer – bitte laden",
+    msgOther: "Eine andere Steuerung fliegt – du siehst die Telemetrie", msgCalibrating: "Drohne kalibriert – bitte still hinstellen",
+    msgMotorTest: "Motortest läuft", msgFlying: "Im Flug", msgIdle: (b) => `Gas runter, dann ${b} 1 s halten zum Scharfschalten`,
+    msgThrottleDown: "Zum Entschärfen Gas runter – oder NOT-AUS",
+    msgHttps: "Diese Seite kommt aus dem Internet (https), und von dort lassen Browser keine Verbindung zur Drohne zu. " +
+      "Seite speichern (Strg+S) oder herunterladen und die Datei vom eigenen Computer öffnen.",
+    evConnected: (a) => `Verbunden mit ${a}`, evDisconnected: "Verbindung verloren", evInfo: (j) => `${j.device} · Firmware ${j.fw} · Protokoll ${j.proto}`,
+    evArmed: "Scharfgeschaltet", evStopped: (r) => `Gestoppt: ${r}`, evStage: (s) => s, evLinkBack: "Verbindung zurück, Pilot steuert",
+    evBatLow: "Akku schwach", evBatLand: "Zwangslandung: Akku leer", evPad: (n) => `Gamepad verbunden: ${n}`,
+    evPadLost: "Gamepad getrennt", evKill: "NOT-AUS gedrückt", evTrim: (r, p) => `Trimmung R ${r} · N ${p}`,
+    evRates: (n) => `Raten: ${n}`, evMarker: (n) => `Markierung ${n}`, evRecSaved: (n) => `Aufzeichnung ${n} als CSV gespeichert`,
+    evPause: (why) => `Befehle angehalten: ${why}`, evResume: "Befehle laufen wieder",
+    vArmed: "Scharf", vDisarmed: "Entschärft", vLinkLost: "Verbindung verloren", vLinkBack: "Verbindung zurück",
+    vBatLow: "Akku schwach", vBatLand: "Akku leer. Landung.", vPadLost: "Gamepad getrennt", vStop: "Not aus", vRates: (n) => n,
+    soundOn: "Ton an (klicken zum Stummschalten)", soundOff: "Ton aus", soundBlocked: "Irgendwo klicken, um Ton zu erlauben",
+    license: "ESP-Drone Bodenstation · Copyright © 2026 Philipp Weber. Freie Software unter der GNU General Public " +
+      "License Version 3, OHNE JEDE GEWÄHRLEISTUNG. Lizenztext: https://www.gnu.org/licenses/gpl-3.0.html · " +
+      "Quellcode: Repository des Projekts. Propeller können verletzen: nur fliegen, wo es sicher ist.",
+  },
+};
+
+// ===== helpers ===============================================================
+const $ = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const now = () => performance.now();
+const ms32 = () => (Math.floor(performance.now()) >>> 0);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const local = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+};
+const session = {
+  get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+};
+function pickLang() {
+  const q = new URLSearchParams(location.search).get("lang");
+  if (TEXT[q]) return q;
+  const s = local.get("gs_lang");
+  if (TEXT[s]) return s;
+  return (navigator.language || "").toLowerCase().startsWith("de") ? "de" : "en";
+}
+let lang = pickLang();
+const t = (k) => (k in TEXT[lang] ? TEXT[lang][k] : TEXT.en[k]);
+const num = (v, digits) => {
+  let s = v.toFixed(digits);
+  if (/^-0(\.0*)?$/.test(s)) s = s.slice(1);          // no "-0"
+  return lang === "de" ? s.replace(".", ",") : s;
+};
+const signed = (v, digits) => { const r = +v.toFixed(digits); return (r > 0 ? "+" : r < 0 ? "−" : "") + num(Math.abs(r), digits); };
+const fmtTrim = (v) => signed(v / 10, 1) + "°";
+const clock = (d) => d.toLocaleTimeString(lang === "de" ? "de-DE" : "en-GB", { hour12: false });
+function mmss(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+function hms(ms) {
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600);
+  return h ? `${h}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : mmss(ms);
+}
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: type || "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function stamp(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function batteryPercent(v) {
+  const tbl = [3.0, 3.78, 3.83, 3.87, 3.89, 3.92, 3.96, 4.0, 4.04, 4.1];
+  if (v <= tbl[0]) return 0;
+  for (let i = 1; i < tbl.length; i++) if (v < tbl[i]) return Math.round(10 * (i - 1 + (v - tbl[i - 1]) / (tbl[i] - tbl[i - 1])));
+  return 100;
+}
+
+// ===== settings (localStorage) ===============================================
+const DEFAULTS = {
+  drone: "192.168.43.42", mode: 2, throttle: "spring", rates: 1, thrMin: 25, thrMax: 85, expo: 0.3, expoYaw: 0.2,
+  dead: 0.06, rumble: true, sound: true, voice: true, blurPause: true, keyboard: false, plotWin: 10, plotSet: "flight",
+  panel: "pad", linkRP: true, liveGains: false, autoRec: true, mtPower: 15, mtTime: 2000, padKey: "", bindings: {},
+  stepDeg: 5, stepHold: true,
+};
+const RATE_SCALE = [0.5, 0.75, 1.0];
+const RATE_KEYS = ["rateBeginner", "rateNormal", "rateSport"];
+let settings = Object.assign({}, DEFAULTS);
+try { Object.assign(settings, JSON.parse(local.get("gs_settings") || "{}")); } catch (e) { /* defaults */ }
+{
+  const q = new URLSearchParams(location.search).get("host");
+  if (q) settings.drone = q;
+}
+function saveSettings() { local.set("gs_settings", JSON.stringify(settings)); }
+// ===== time series for plots and the recorder ================================
+class Series {
+  constructor(cap) { this.cap = cap; this.t = new Float64Array(cap); this.v = new Float32Array(cap); this.len = 0; this.head = 0; }
+  push(t, v) {
+    this.t[this.head] = t; this.v[this.head] = v;
+    this.head = (this.head + 1) % this.cap;
+    if (this.len < this.cap) this.len++;
+  }
+  idx(k) { return (this.head - this.len + k + this.cap) % this.cap; }   // k-th oldest
+  last() { return this.len ? this.v[this.idx(this.len - 1)] : NaN; }
+  lastT() { return this.len ? this.t[this.idx(this.len - 1)] : -Infinity; }
+  lowerBound(a) {            // first k with t >= a
+    let lo = 0, hi = this.len;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (this.t[this.idx(m)] < a) lo = m + 1; else hi = m; }
+    return lo;
+  }
+  forEach(a, b, fn) {
+    for (let k = this.lowerBound(a); k < this.len; k++) {
+      const i = this.idx(k), tt = this.t[i];
+      if (tt > b) break;
+      fn(tt, this.v[i]);
+    }
+  }
+  at(tq) {                   // value of the newest sample at or before tq
+    const k = this.lowerBound(tq + 1e-6) - 1;
+    return k >= 0 ? this.v[this.idx(k)] : NaN;
+  }
+  clear() { this.len = 0; this.head = 0; }
+}
+const FAST_SIGS = ["roll", "pitch", "yaw", "rollSp", "pitchSp", "gRoll", "gPitch", "gYaw", "rRoll", "rPitch", "rYaw",
+  "m1", "m2", "m3", "m4", "thrCmd"];
+const TEL_SIGS = ["tRoll", "tPitch", "thrOut", "vbat", "rtt", "delay", "rx", "drop"];
+const sig = {};
+for (const k of FAST_SIGS) sig[k] = new Series(7000);     // 70 s at 100 Hz
+for (const k of TEL_SIGS) sig[k] = new Series(1500);      // 75 s at 20 Hz
+sig.inThr = new Series(3600);                             // 72 s at 50 Hz
+
+// ===== event log, alerts ======================================================
+const logEntries = [];
+function logEvent(text, lvl) {
+  logEntries.push({ d: new Date(), text, lvl: lvl || "info" });
+  if (logEntries.length > 3000) logEntries.splice(0, 500);
+  renderLog();
+}
+
+const audio = { ctx: null };
+function audioCtx() {
+  if (!audio.ctx) {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (C) { try { audio.ctx = new C(); } catch (e) { audio.ctx = null; } }
+  }
+  if (audio.ctx && audio.ctx.state === "suspended") audio.ctx.resume().catch(() => {});
+  return audio.ctx;
+}
+["pointerdown", "keydown"].forEach((ev) => window.addEventListener(ev, () => audioCtx(), { capture: true }));
+function beep(notes) {          // notes: [freq Hz, duration ms, pause ms]
+  if (!settings.sound) return;
+  const ctx = audioCtx();
+  if (!ctx || ctx.state !== "running") return;
+  let at = ctx.currentTime + 0.01;
+  for (const [f, d, p] of notes) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "square"; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.09, at + 0.01);
+    g.gain.setValueAtTime(0.09, at + d / 1000 - 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + d / 1000);
+    o.connect(g).connect(ctx.destination);
+    o.start(at); o.stop(at + d / 1000 + 0.02);
+    at += (d + (p || 40)) / 1000;
+  }
+}
+function say(text, urgent) {
+  if (!settings.voice || !window.speechSynthesis || !text) return;
+  try {
+    if (urgent) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === "de" ? "de-DE" : "en-US";
+    u.rate = 1.1;
+    speechSynthesis.speak(u);
+  } catch (e) { /* no speech on this system */ }
+}
+function rumble(ms, strong, weak) {
+  if (!settings.rumble || !input.pad) return;
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const p = pads[input.pad.index];
+  const act = p && p.vibrationActuator;
+  if (act && act.playEffect) {
+    act.playEffect("dual-rumble", { startDelay: 0, duration: ms, strongMagnitude: strong, weakMagnitude: weak }).catch(() => {});
+  }
+}
+const ALERTS = {
+  armed: () => { beep([[880, 90], [1320, 130]]); say(t("vArmed")); rumble(120, 0.3, 0.6); },
+  disarmed: () => { beep([[660, 90], [440, 150]]); say(t("vDisarmed")); rumble(120, 0.2, 0.4); },
+  stop: () => { beep([[330, 400]]); say(t("vStop"), true); rumble(400, 1, 1); },
+  linkLost: () => { beep([[1000, 160, 60], [700, 160, 60], [1000, 160, 60], [700, 160]]); say(t("vLinkLost"), true); rumble(600, 1, 0.5); },
+  linkBack: () => { beep([[700, 80], [1000, 120]]); say(t("vLinkBack")); },
+  batLow: () => { beep([[880, 120, 120], [880, 120]]); say(t("vBatLow")); rumble(150, 0.6, 0.6); setTimeout(() => rumble(150, 0.6, 0.6), 300); },
+  batLand: () => { beep([[600, 300, 100], [600, 300, 100], [600, 300]]); say(t("vBatLand"), true); rumble(800, 1, 1); },
+  padLost: () => { beep([[1200, 120, 50], [1200, 120, 50], [1200, 120, 50], [1200, 120]]); say(t("vPadLost"), true); },
+  tick: () => { beep([[1500, 25]]); rumble(40, 0, 0.5); },
+  limit: () => { beep([[300, 120]]); rumble(200, 0.8, 0); },
+  rates: (n) => { beep([[1000, 50, 60]].concat(Array(settings.rates).fill([1400, 50, 60]))); say(t("vRates")(n)); },
+  motor: () => beep([[520, 60]]),
+};
+
+// ===== connection =============================================================
+const link = {
+  ws: null, open: false, ready: false, infoSeen: false, info: null, tel: null, lastTel: 0, prevTel: null,
+  rtt: -1, rttMin: Infinity, rttMax: 0, seq: 0, sent: 0, skipped: 0, sentRate: 0, sentWin: 0, sentT: 0,
+  token: (session.get("gs_token") | 0) >>> 0, reconnectDelay: 250, timer: 0,
+  fastFrames: 0, fastRate: 0, fastWin: 0, fastT: 0, lastFastSeq: null, fastGaps: 0, lastFast: 0,
+  offset: null, prevStale: null, everConnected: false, address: "",
+};
+let armReq = false, armSince = 0, killUntil = 0, pauseWhy = "";
+
+function wsUrl() {
+  const h = (settings.drone || DEFAULTS.drone).trim();
+  return h.includes(":") ? `ws://${h}/ws` : `ws://${h}:81/ws`;
+}
+function connect() {
+  clearTimeout(link.timer);
+  link.ready = false; link.infoSeen = false; link.open = false;
+  if (link.ws) { try { link.ws.onclose = null; link.ws.close(); } catch (e) { /* closed */ } }
+  link.address = (settings.drone || DEFAULTS.drone).trim();
+  let ws;
+  try { ws = new WebSocket(wsUrl()); } catch (e) { scheduleReconnect(); return; }
+  link.ws = ws;
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    link.open = true; link.reconnectDelay = 250; link.lastTel = now(); link.offset = null; link.lastFastSeq = null;
+    const b = new DataView(new ArrayBuffer(8));
+    b.setUint8(0, MSG.HELLO); b.setUint8(1, PROTO); b.setUint32(4, link.token, true);
+    ws.send(b.buffer);
+    const s = new Uint8Array([MSG.STREAM, 1, 0, 0]);     // FAST samples; old firmware ignores it
+    ws.send(s.buffer);
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      try { const j = JSON.parse(ev.data); if (j.t === "info") onInfo(j); } catch (e) { /* not JSON */ }
+      return;
+    }
+    const v = new DataView(ev.data);
+    if (v.byteLength < 1) return;
+    const type = v.getUint8(0);
+    if (type === MSG.TELEMETRY && v.byteLength >= TELEMETRY_LEN) onTelemetry(v);
+    else if (type === MSG.FAST) onFast(v);
+    else if (type === MSG.PARAM_REPLY) onParamReply(v);
+    else if (type === MSG.MOTOR_REPLY) onMotorReply(v);
+  };
+  ws.onclose = () => {
+    const was = link.infoSeen;
+    link.open = false; link.ready = false; link.infoSeen = false;
+    if (was) { logEvent(t("evDisconnected"), "bad"); ALERTS.linkLost(); }
+    scheduleReconnect();
+  };
+  ws.onerror = () => { try { ws.close(); } catch (e) { /* closed */ } };
+}
+function scheduleReconnect() {
+  clearTimeout(link.timer);
+  link.timer = setTimeout(connect, link.reconnectDelay);
+  link.reconnectDelay = Math.min(2000, link.reconnectDelay * 2);
+}
+function send(buf) {
+  if (link.ws && link.open) { try { link.ws.send(buf); return true; } catch (e) { /* closing */ } }
+  return false;
+}
+const proto = () => (link.info && link.info.proto) || 0;
+
+function onInfo(j) {
+  link.info = j; link.infoSeen = true;
+  logEvent(t("evConnected")(link.address), "ok");
+  logEvent(t("evInfo")(j));
+  if (proto() >= 3) readAllGains();
+  renderPanels();
+}
+
+// Drone clock -> local clock. Network delay only makes frames later, so the
+// smallest (arrival - drone time) is the best estimate; it creeps up slowly
+// to follow clock drift.
+function droneToLocal(droneMs) {
+  const cand = now() - droneMs;
+  if (link.offset === null || cand < link.offset) link.offset = cand;
+  else link.offset += 0.02;
+  return droneMs + link.offset;
+}
+
+function onTelemetry(v) {
+  if (!link.infoSeen) return;           // telemetry before the answer to HELLO
+  const tm = {
+    state: v.getUint8(1), stage: v.getUint8(2), armResult: v.getUint8(3), echoSeq: v.getUint16(4, true),
+    rxRate: v.getUint16(6, true), echoMs: v.getUint32(8, true), vbat: v.getUint16(12, true) / 1000,
+    roll: v.getInt16(14, true) / 100, pitch: v.getInt16(16, true) / 100, yaw: v.getInt16(18, true) / 100,
+    thrust: v.getUint16(20, true) / 1000, stale: v.getUint16(22, true), delay: v.getUint16(24, true),
+    state2: v.getUint8(26), stopReason: v.getUint8(27), uptime: v.getUint32(28, true), token: v.getUint32(32, true),
+    trimR: v.getInt8(36), trimP: v.getInt8(37),
+  };
+  const tNow = now();
+  const prev = link.tel;
+  link.prevTel = prev; link.tel = tm; link.lastTel = tNow;
+  const r = (ms32() - tm.echoMs) >>> 0;
+  if (tm.echoMs && r < 10000) {
+    link.rtt = link.rtt < 0 ? r : link.rtt * 0.8 + r * 0.2;
+    link.rttMin = Math.min(link.rttMin, r); link.rttMax = Math.max(link.rttMax, r);
+    sig.rtt.push(tNow, r);
+  }
+  const tl = droneToLocal(tm.uptime);
+  sig.tRoll.push(tl, tm.roll); sig.tPitch.push(tl, tm.pitch); sig.thrOut.push(tl, tm.thrust * 100);
+  if (tm.vbat > 0) sig.vbat.push(tl, tm.vbat);
+  const mine = !!((tm.state & S_ARMED) && (tm.state & S_YOU));
+  if (mine) {
+    sig.delay.push(tl, tm.delay);
+    if (link.prevStale !== null) sig.drop.push(tl, ((tm.stale - link.prevStale) & 0xffff) * 20);
+    link.prevStale = tm.stale;
+  } else link.prevStale = null;
+  sig.rx.push(tl, tm.rxRate);
+  if (levelSamples && !sig.roll.len && tNow < levelUntil && !(tm.state & S_ARMED)) levelSamples.push({ r: tm.roll, p: tm.pitch });
+
+  if (tm.token) { link.token = tm.token; session.set("gs_token", String(tm.token)); }
+  telemetryEvents(prev, tm, mine, tNow);
+  if (!mine && !armReq && link.token) { link.token = 0; session.set("gs_token", "0"); }
+  recOnTelemetry(tm, tl);
+}
+
+let flightStart = 0, lastFlightMs = 0, batLowSaid = 0;
+function telemetryEvents(prev, tm, mine, tNow) {
+  const wasMine = !!(prev && (prev.state & S_ARMED) && (prev.state & S_YOU));
+  const stopText = (tm.stopReason > 1 && t("stopReasons")[tm.stopReason]) || "";
+  if (!link.ready) {
+    // first telemetry after (re)connect: take over the drone's view of the arm state
+    if (armReq && !mine && stopText) toast(stopText, tm.stopReason === STOP_BATTERY ? "bad" : "warn");
+    armReq = mine; link.ready = true;
+    if (mine) {
+      // a session resumed after a reload: only the device it was flown with may go on
+      flightStart = flightStart || tNow;
+      input.flightSource = settings.keyboard && !input.hadPad ? "keyboard" : "pad";
+    }
+  } else if (armReq && !mine && tNow - armSince > 600) {
+    armReq = false;
+    if (wasMine && stopText) toast(stopText, tm.stopReason === STOP_BATTERY ? "bad" : "warn");
+    else if (tm.armResult) toast(t("armReasons")[tm.armResult] || "", "warn");
+  }
+  if (mine && !wasMine && link.ready) {
+    flightStart = tNow; logEvent(t("evArmed"), "ok"); ALERTS.armed();
+  }
+  if (!mine && wasMine) {
+    lastFlightMs = tNow - flightStart; flightStart = 0;
+    logEvent(t("evStopped")(t("stopReasons")[tm.stopReason] || t("stopReasons")[1]), tm.stopReason > 1 ? "warn" : "info");
+    if (tm.stopReason !== 2) ALERTS.disarmed();
+  }
+  if (mine && prev) {
+    if (tm.stage >= 2 && prev.stage < 2) { logEvent(t("evStage")(t("stages")[tm.stage]), "bad"); ALERTS.linkLost(); }
+    else if (tm.stage >= 3 && prev.stage === 2) logEvent(t("evStage")(t("stages")[tm.stage]), "bad");
+    if (wasMine && tm.stage === 0 && prev.stage >= 2 && prev.stage <= 3) { logEvent(t("evLinkBack"), "ok"); ALERTS.linkBack(); }
+    if ((tm.state2 & S2_BAT_LAND) && !(prev.state2 & S2_BAT_LAND)) { logEvent(t("evBatLand"), "bad"); ALERTS.batLand(); }
+    if ((tm.state & S_LOWBAT) && !(tm.state2 & S2_BAT_LAND) && tNow - batLowSaid > 30000) {
+      batLowSaid = tNow; logEvent(t("evBatLow"), "warn"); ALERTS.batLow();
+    }
+  }
+  if (prev && (tm.state2 & S2_MOTOR_TEST) !== (prev.state2 & S2_MOTOR_TEST) && !(tm.state2 & S2_MOTOR_TEST)) {
+    motorTest.running = 0; renderMotors();
+  }
+}
+
+function onFast(v) {
+  const n = v.getUint8(1);
+  if (n < 1 || n > 5 || v.byteLength !== FAST_HDR + n * FAST_SAMPLE) return;
+  const seq = v.getUint16(2, true), t0 = v.getUint32(4, true), period = v.getUint8(8) || 10;
+  if (link.lastFastSeq !== null && ((seq - link.lastFastSeq) & 0xffff) !== 0) link.fastGaps++;
+  link.lastFastSeq = (seq + n) & 0xffff;
+  link.fastFrames++; link.lastFast = now();
+  const base = droneToLocal(t0 + (n - 1) * period) - (n - 1) * period;
+  for (let i = 0; i < n; i++) {
+    const o = FAST_HDR + i * FAST_SAMPLE, tl = base + i * period;
+    const g = (k) => v.getInt16(o + 2 * k, true);
+    const s = {
+      roll: g(0) / 100, pitch: g(1) / 100, yaw: g(2) / 100, rollSp: g(3) / 100, pitchSp: g(4) / 100,
+      gRoll: g(5) / 10, gPitch: g(6) / 10, gYaw: g(7) / 10, rRoll: g(8) / 10, rPitch: g(9) / 10, rYaw: g(10) / 10,
+      m1: v.getUint16(o + 22, true) / 655.35, m2: v.getUint16(o + 24, true) / 655.35,
+      m3: v.getUint16(o + 26, true) / 655.35, m4: v.getUint16(o + 28, true) / 655.35,
+      thrCmd: v.getUint16(o + 30, true) / 600,
+    };
+    for (const k of FAST_SIGS) sig[k].push(tl, s[k]);
+    if (levelSamples && now() < levelUntil && !(link.tel && (link.tel.state & S_ARMED))) levelSamples.push({ r: s.roll, p: s.pitch });
+    recOnFast(s, tl);
+  }
+}
+
+// ===== control frames =========================================================
+function sendControl(extraFlags, force) {
+  if (!link.ws || !link.open || (!link.ready && !force)) return;
+  if (link.ws.bufferedAmount > 0 && !force) { link.skipped++; return; }   // never queue old commands
+  let flags = extraFlags | 0;
+  if (armReq) flags |= F_ARM;
+  if (now() < killUntil) flags |= F_KILL;
+  const c = input.cmd;
+  const b = new DataView(new ArrayBuffer(16));
+  b.setUint8(0, MSG.CONTROL); b.setUint8(1, flags); b.setUint16(2, link.seq, true); b.setUint32(4, ms32(), true);
+  b.setInt16(8, Math.round(clamp(c.roll, -1, 1) * 1000), true);
+  b.setInt16(10, Math.round(clamp(c.pitch, -1, 1) * 1000), true);
+  b.setInt16(12, Math.round(clamp(c.yaw, -1, 1) * 1000), true);
+  b.setUint16(14, Math.round(clamp(c.thrust, 0, 1) * 1000), true);
+  if (send(b.buffer)) { link.seq = (link.seq + 1) & 0xffff; link.sent++; }
+}
+function sendTrimFrame(r, p) {
+  const b = new DataView(new ArrayBuffer(4));
+  b.setUint8(0, MSG.TRIM); b.setInt8(1, r); b.setInt8(2, p);
+  return send(b.buffer);
+}
+
+// ===== parameters (controller gains) ==========================================
+const gains = {};            // name -> {value, dflt, writable}
+let gainsStored = false, gainReqId = 0;
+const gainEdits = {};        // name -> value typed but not sent
+const pendingParams = {};    // reqId -> {op, name, value}
+function sendParam(op, name, value) {
+  if (proto() < 3) return false;
+  const nameBytes = new TextEncoder().encode(name || "");
+  const b = new DataView(new ArrayBuffer(8 + nameBytes.length));
+  gainReqId = (gainReqId + 1) & 0xff;
+  b.setUint8(0, MSG.PARAM); b.setUint8(1, op); b.setUint8(2, gainReqId); b.setFloat32(4, value || 0, true);
+  new Uint8Array(b.buffer, 8).set(nameBytes);
+  pendingParams[gainReqId] = { op, name, value };
+  return send(b.buffer);
+}
+function readAllGains() { for (const n of GAIN_NAMES) sendParam(P_READ, n, 0); }
+function onParamReply(v) {
+  if (v.byteLength < 14) return;
+  const op = v.getUint8(1), id = v.getUint8(2), status = v.getUint8(3);
+  const value = v.getFloat32(4, true), dflt = v.getFloat32(8, true), flags = v.getUint8(12);
+  const name = new TextDecoder().decode(new Uint8Array(v.buffer, 14));
+  const req = pendingParams[id];
+  delete pendingParams[id];
+  gainsStored = !!(flags & PF_STORED);
+  if (op === P_SAVE || op === P_RESET) {
+    if (status === 0) {
+      toast(op === P_SAVE ? t("gainsSaved") : t("gainsReset"), "ok");
+      logEvent(op === P_SAVE ? t("gainsSaved") : t("gainsReset"), "ok");
+      if (op === P_RESET) { for (const k in gainEdits) delete gainEdits[k]; readAllGains(); }
+    } else toast(t("paramStatus")[status] || "?", "warn");
+    renderGains();
+    return;
+  }
+  if (status === 1 || !name) { renderGains(); return; }
+  gains[name] = { value, dflt: Number.isFinite(dflt) ? dflt : null, writable: !!(flags & PF_WRITABLE) };
+  if (op === P_WRITE) {
+    if (status === 0) {
+      logEvent(t("gainSet")(name, +value.toPrecision(4)), "info");
+      if (gainEdits[name] !== undefined && Math.abs(gainEdits[name] - value) < 1e-4 * Math.max(1, Math.abs(value))) delete gainEdits[name];
+    } else {
+      toast(`${name}: ${t("paramStatus")[status] || "?"}`, "warn");
+      if (req) delete gainEdits[name];
+    }
+  }
+  renderGains();
+}
+
+// ===== motor test ===============================================================
+const motorTest = { running: 0, until: 0, percent: 0 };
+function sendMotorTest(mask, percent, ms) {
+  const b = new DataView(new ArrayBuffer(8));
+  b.setUint8(0, MSG.MOTOR_TEST); b.setUint8(1, mask); b.setUint8(2, percent); b.setUint16(4, ms, true);
+  return send(b.buffer);
+}
+function onMotorReply(v) {
+  if (v.byteLength < 8) return;
+  const mask = v.getUint8(1), percent = v.getUint8(2), status = v.getUint8(3), ms = v.getUint16(4, true);
+  if (status === 0 && mask) {
+    motorTest.running = mask; motorTest.until = now() + ms; motorTest.percent = percent;
+    const names = [0, 1, 2, 3].filter((m) => mask & (1 << m)).map((m) => `M${m + 1}`).join(" ");
+    $("mtStatus").textContent = t("mtRunning")(names, percent);
+    logEvent(t("mtRunning")(names, percent), "warn");
+  } else if (status === 0) {
+    motorTest.running = 0; $("mtStatus").textContent = t("mtStopped");
+  } else {
+    motorTest.running = 0;
+    $("mtStatus").textContent = t("mtStatus")[status] || "?";
+    toast(t("mtStatus")[status] || "?", "warn");
+  }
+  renderMotors();
+}
+// ===== input: gamepads and keyboard ===========================================
+const ACTIONS = ["arm", "stop", "trimUp", "trimDown", "trimLeft", "trimRight", "rates", "level", "marker", "stepRoll", "stepPitch"];
+const STICKS = ["throttle", "yaw", "pitch", "roll"];
+const ACTION_TEXT = { arm: "aArm", stop: "aStop", trimUp: "aTrimUp", trimDown: "aTrimDown", trimLeft: "aTrimLeft",
+  trimRight: "aTrimRight", rates: "aRates", level: "aLevel", marker: "aMarker", stepRoll: "aStepRoll",
+  stepPitch: "aStepPitch", roll: "aRoll", pitch: "aPitch",
+  yaw: "aYaw", throttle: "aThrottle" };
+// Button labels by position in the standard layout (https://w3c.github.io/gamepad/#remapping)
+const LABELS = {
+  ps3: ["✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Select", "Start", "L3", "R3", "↑", "↓", "←", "→", "PS"],
+  ps4: ["✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Share", "Options", "L3", "R3", "↑", "↓", "←", "→", "PS", "Pad"],
+  ps5: ["✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Create", "Options", "L3", "R3", "↑", "↓", "←", "→", "PS", "Pad"],
+  xbox: ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "View", "Menu", "LS", "RS", "↑", "↓", "←", "→", "Xbox"],
+  switch: ["B", "A", "Y", "X", "L", "R", "ZL", "ZR", "−", "+", "LS", "RS", "↑", "↓", "←", "→", "Home", "Capture"],
+  generic: ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Back", "Start", "LS", "RS", "↑", "↓", "←", "→", "Home"],
+};
+function padInfo(id) {
+  const m = /vendor:\s*([0-9a-f]{4})\s*product:\s*([0-9a-f]{4})/i.exec(id) || /^([0-9a-f]{4})-([0-9a-f]{4})-/i.exec(id);
+  const vid = m ? m[1].toLowerCase() : "", pid = m ? m[2].toLowerCase() : "";
+  const s = id.toLowerCase();
+  let family = "generic";
+  if (vid === "054c" || /sony|dualshock|dualsense|playstation/.test(s)) {
+    family = pid === "0268" || /playstation\(r\)3|ps3/.test(s) ? "ps3" : (pid === "0ce6" || pid === "0df2" || /dualsense/.test(s)) ? "ps5" : "ps4";
+  } else if (vid === "057e" || /nintendo|pro controller|joy-con/.test(s)) family = "switch";
+  else if (vid === "045e" || /xbox|xinput|microsoft/.test(s)) family = "xbox";
+  const name = id.replace(/\s*\((?:standard gamepad\s*)?vendor:.*$/i, "").replace(/^[0-9a-f]{4}-[0-9a-f]{4}-/i, "").trim() || id;
+  return { family, name };
+}
+
+const input = {
+  source: "none",          // "pad", "keyboard", "none"
+  pad: null, padId: "", padName: "", family: "generic", standard: false, list: [],
+  raw: { roll: 0, pitch: 0, yaw: 0, thr: 0 }, travel: 0,   // travel: throttle stick 0..1
+  cmd: { roll: 0, pitch: 0, yaw: 0, thrust: 0 },
+  buttons: {}, axes: [], btnState: [],
+  hadPad: false,
+  flightSource: "",        // input source the current flight started with
+};
+const keys = new Set();
+const kb = { thr: 0, roll: 0, pitch: 0 };
+const learn = { action: null, base: null, until: 0 };
+
+function defaultBindings() {
+  const b = { arm: { k: "b", i: 9 }, stop: { k: "b", i: 1 }, trimUp: { k: "b", i: 12 }, trimDown: { k: "b", i: 13 },
+    trimLeft: { k: "b", i: 14 }, trimRight: { k: "b", i: 15 }, rates: { k: "b", i: 3 }, level: { k: "b", i: 2 },
+    marker: { k: "b", i: 0 }, stepRoll: { k: "b", i: 5 }, stepPitch: { k: "b", i: 4 } };
+  // standard layout: axes 0/1 left stick, 2/3 right stick, down = +1
+  const left = settings.mode === 1 ? "pitch" : "throttle", right = settings.mode === 1 ? "throttle" : "pitch";
+  b.yaw = { k: "a", i: 0 }; b[left] = { k: "a", i: 1, inv: true };
+  b.roll = { k: "a", i: 2 }; b[right] = { k: "a", i: 3, inv: true };
+  return b;
+}
+function bindings() {
+  const b = defaultBindings();
+  const saved = settings.bindings[input.padId];
+  if (saved) {
+    // Standard pads keep the sticks of the stick mode; others use what was learned.
+    for (const k of Object.keys(saved)) if (!input.standard || ACTIONS.includes(k)) b[k] = saved[k];
+  }
+  return b;
+}
+function readAxis(pad, b) {
+  if (!b || !pad) return 0;
+  if (b.k === "a") { const v = pad.axes[b.i] || 0; return b.inv ? -v : v; }
+  const bt = pad.buttons[b.i];
+  return bt ? bt.value : 0;
+}
+function readButton(pad, b) {
+  if (!b || !pad) return false;
+  if (b.k === "b") { const bt = pad.buttons[b.i]; return !!(bt && (bt.pressed || bt.value > 0.5)); }
+  const v = pad.axes[b.i] || 0;
+  return b.dir > 0 ? v > 0.5 : v < -0.5;
+}
+function bindingLabel(b) {
+  if (!b) return t("unbound");
+  if (b.k === "b") return (input.standard && LABELS[input.family][b.i]) || t("buttonName")(b.i);
+  if (b.k === "a" && b.dir) return t("axisName")(b.i) + (b.dir > 0 ? "+" : "−");
+  return t("axisName")(b.i) + (b.inv ? " ⇅" : "");
+}
+const actionLabel = (a) => bindingLabel(bindings()[a]);
+
+function shape(v, expo, dead) {
+  const a = Math.abs(v);
+  if (a < dead) return 0;
+  const x = Math.min(1, (a - dead) / (1 - dead));
+  return Math.sign(v) * ((1 - expo) * x + expo * x * x * x);
+}
+function thrustCurve(y) {      // y: throttle travel 0..1
+  if (y < 0.04) return 0;
+  const lo = settings.thrMin / 100, hi = Math.max(settings.thrMin, settings.thrMax) / 100;
+  return lo + (hi - lo) * Math.min(1, (y - 0.04) / 0.96);
+}
+
+function pollPads() {
+  const all = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter((p) => p && p.connected) : [];
+  input.list = all;
+  let pad = null;
+  if (settings.padKey === "keyboard") pad = null;
+  else pad = all.find((p) => p.id === settings.padKey) || all[0] || null;
+  const changed = pad && pad.id !== input.padId, lost = !pad && input.pad;
+  input.pad = pad;
+  if (changed) {
+    const info = padInfo(pad.id);
+    input.padId = pad.id; input.padName = info.name; input.family = info.family;
+    input.standard = pad.mapping === "standard";
+    logEvent(t("evPad")(info.name), "ok");
+    toast(t("padConnectedMsg")(info.name), "info");
+  }
+  if (lost) { logEvent(t("evPadLost"), "bad"); input.padId = ""; }
+  if (changed || lost || input.list.length !== pollPads.count) { pollPads.count = input.list.length; renderPadPanel(); }
+  if (pad) input.hadPad = true;
+}
+
+function pollInput(tNow, dt) {
+  pollPads();
+  const pad = input.pad;
+  const r = input.raw;
+  input.buttons = {};
+  if (pad) {
+    input.source = "pad";
+    input.axes = Array.from(pad.axes);
+    input.btnState = pad.buttons.map((b) => b.value || (b.pressed ? 1 : 0));
+    const b = bindings();
+    r.roll = readAxis(pad, b.roll); r.pitch = readAxis(pad, b.pitch); r.yaw = readAxis(pad, b.yaw);
+    r.thr = readAxis(pad, b.throttle);
+    if (settings.throttle === "trigger") {
+      const tb = input.standard ? { k: "b", i: 7 } : b.throttle;
+      const v = readAxis(pad, tb);
+      input.travel = tb && tb.k === "a" ? (v + 1) / 2 : v;
+    } else if (settings.throttle === "full") input.travel = (r.thr + 1) / 2;
+    else input.travel = Math.max(0, r.thr);
+    if (!learn.action) for (const a of ACTIONS) input.buttons[a] = readButton(pad, b[a]);
+    if (learn.action) learnPoll(pad, tNow);
+  } else if (settings.keyboard) {
+    input.source = "keyboard";
+    const k = (c) => keys.has(c);
+    kb.thr = clamp(kb.thr + dt * ((k("KeyW") ? 0.45 : 0) - (k("KeyS") ? 0.8 : 0)), 0, 1);
+    if (k("KeyX")) kb.thr = 0;
+    const ramp = (cur, target) => cur + clamp(target - cur, -dt * 4, dt * 4);
+    kb.roll = ramp(kb.roll, (k("ArrowRight") ? 1 : 0) - (k("ArrowLeft") ? 1 : 0));
+    kb.pitch = ramp(kb.pitch, (k("ArrowUp") ? 1 : 0) - (k("ArrowDown") ? 1 : 0));
+    r.roll = kb.roll; r.pitch = kb.pitch; r.yaw = (k("KeyD") ? 1 : 0) - (k("KeyA") ? 1 : 0);
+    r.thr = kb.thr * 2 - 1; input.travel = kb.thr;
+    input.buttons.arm = k("Enter");
+  } else {
+    input.source = "none";
+    r.roll = r.pitch = r.yaw = 0; r.thr = -1; input.travel = 0;
+  }
+  const scale = RATE_SCALE[settings.rates] || 1;
+  const c = input.cmd;
+  c.roll = shape(r.roll, settings.expo, settings.dead) * scale;
+  c.pitch = shape(r.pitch, settings.expo, settings.dead) * scale;
+  c.yaw = shape(r.yaw, settings.expoYaw, settings.dead) * scale;
+  c.thrust = thrustCurve(input.travel);
+  stepOverride(tNow);
+  hoverLearn(tNow);
+  sig.inThr.push(tNow, c.thrust * 100);
+}
+
+// Step test: a doublet on one axis while hovering, for comparing gains.
+const STEP_MS = 300, STEP_SETTLE_MS = 1200, STEP_PRE_MS = 400;
+const step = { axis: null, t0: 0, amp: 0, hist: { roll: [], pitch: [] }, shown: null };
+function startStep(axis) {
+  if (!mineNow() || input.cmd.thrust < 0.15) { toast(t("stepNotFlying"), "warn"); ALERTS.limit(); return; }
+  step.axis = axis; step.t0 = now();
+  step.amp = clamp(settings.stepDeg / ((link.info && link.info.maxAngle) || 15), 0.05, 1);
+  plotView.frozen = null; plotView.range = null;
+  if (settings.plotSet !== "tuning") { settings.plotSet = "tuning"; buildPlots(); }
+  logEvent(t("evStep")(t(axis === "roll" ? "stepRoll" : "stepPitch"), settings.stepDeg));
+  renderFreeze();
+}
+function stepOverride(tNow) {
+  if (!step.axis) return;
+  const el = tNow - step.t0, r = input.raw, c = input.cmd;
+  if (!mineNow() || Math.abs(r.roll) > 0.3 || Math.abs(r.pitch) > 0.3) { step.axis = null; return; }   // the pilot takes over
+  c.roll = c.pitch = 0;
+  if (el < STEP_MS) c[step.axis] = step.amp;
+  else if (el < 2 * STEP_MS) c[step.axis] = -step.amp;
+  else if (el >= 2 * STEP_MS + STEP_SETTLE_MS) finishStep(tNow);
+}
+function finishStep(tNow) {
+  const axis = step.axis, t0 = step.t0;
+  step.axis = null;
+  // keep the response for the grey comparison line of the next test
+  const keys = axis === "roll" ? ["gRoll", "roll"] : ["gPitch", "pitch"];
+  const data = {};
+  for (const k of keys) { data[k] = []; sig[k].forEach(t0 - STEP_PRE_MS, t0 + 2 * STEP_MS + STEP_SETTLE_MS, (tt, v) => data[k].push(tt - t0, v)); }
+  const h = step.hist[axis];
+  h.unshift({ t0, data });
+  h.length = Math.min(h.length, 2);
+  step.shown = axis;
+  if (settings.stepHold) {
+    plotView.range = [t0 - STEP_PRE_MS, t0 + 2 * STEP_MS + STEP_SETTLE_MS];
+    plotView.frozen = plotView.range[1];
+    toast(t("stepHeld"), "info");
+    renderFreeze();
+  }
+}
+
+// Hover thrust: low pass of the thrust while flying level
+const hover = { value: 0, seconds: 0, last: 0 };
+function hoverLearn(tNow) {
+  const tm = link.tel, dt = hover.last ? (tNow - hover.last) / 1000 : 0;
+  hover.last = tNow;
+  if (!tm || !mineNow() || tm.stage !== 0 || tm.thrust < 0.15 || Math.abs(tm.roll) > 6 || Math.abs(tm.pitch) > 6 || dt <= 0 || dt > 0.2) return;
+  const k = Math.min(1, dt / 3);
+  hover.value = hover.seconds ? hover.value + (tm.thrust - hover.value) * k : tm.thrust;
+  hover.seconds += dt;
+}
+function fitHover() {
+  if (hover.seconds < 3) { toast(t("hoverNone"), "warn"); return; }
+  const span = Math.max(20, settings.thrMax - settings.thrMin);
+  let lo = Math.round(hover.value * 100 - span * 0.46 / 0.96);
+  lo = clamp(lo, 0, 50);
+  const hi = clamp(lo + span, 50, 100);
+  settings.thrMin = lo; settings.thrMax = hi; saveSettings();
+  $("setThrMin").value = lo; $("setThrMax").value = hi;
+  $("vThrMin").textContent = lo + " %"; $("vThrMax").textContent = hi + " %";
+  toast(t("hoverDone")(lo, hi), "ok");
+}
+
+// Learning a binding: wait for a button press or a big stick movement.
+function startLearn(action) {
+  if (!input.pad) { toast(t("noPad"), "warn"); return; }
+  if (armReq || mineNow()) return;
+  learn.action = action;
+  learn.base = { axes: Array.from(input.pad.axes), buttons: input.pad.buttons.map((b) => b.pressed) };
+  learn.until = now() + 8000;
+  renderBindTable();
+}
+function learnPoll(pad, tNow) {
+  const a = learn.action;
+  if (tNow > learn.until) { learn.action = null; toast(t("learnTimeout"), "warn"); renderBindTable(); return; }
+  const isStick = STICKS.includes(a);
+  let found = null;
+  pad.axes.forEach((v, i) => {
+    const d = v - (learn.base.axes[i] || 0);
+    if (!found && Math.abs(d) > 0.6) found = isStick ? { k: "a", i, inv: d < 0 } : { k: "a", i, dir: d > 0 ? 1 : -1 };
+  });
+  if (!isStick) pad.buttons.forEach((b, i) => { if (!found && b.pressed && !learn.base.buttons[i]) found = { k: "b", i }; });
+  if (!found) return;
+  const saved = Object.assign({}, settings.bindings[input.padId] || {});
+  saved[a] = found;
+  settings.bindings[input.padId] = saved;
+  saveSettings();
+  learn.action = null;
+  act.block = tNow + 600;     // the learned button must not trigger its action right away
+  toast(t("learnDone")(t(ACTION_TEXT[a]), bindingLabel(found)), "ok");
+  renderBindTable();
+}
+
+window.addEventListener("keydown", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  // Esc stops what this window controls; when someone else flies, the STOP button is there.
+  if (e.code === "Escape" && (armReq || mineNow() || motorTest.running)) { e.preventDefault(); doKill(); return; }
+  if (learn.action) return;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (settings.keyboard && !input.pad) {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
+    if (e.code === "Backspace") { e.preventDefault(); doDisarm(false); }
+  }
+  keys.add(e.code);
+});
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+window.addEventListener("blur", () => keys.clear());
+
+// ===== actions: arm, STOP, trim, rates, level, marker ===============================
+const act = { prev: {}, since: {}, fired: {}, block: 0, hold: { arm: 0 } };
+function runActions(tNow) {
+  const b = input.buttons;
+  for (const a of ACTIONS) {
+    const pressed = !!b[a] && tNow > act.block, was = !!act.prev[a];
+    if (pressed && !was) { act.since[a] = tNow; act.fired[a] = false; onPress(a); }
+    if (pressed && !act.fired[a]) {
+      const held = tNow - act.since[a];
+      if (a === "arm" && !armReq && held >= ARM_HOLD_MS) { act.fired[a] = true; doArm(); }
+      if (a === "level" && held >= LEVEL_HOLD_MS) { act.fired[a] = true; startLevel(); }
+    }
+    act.prev[a] = pressed;
+  }
+  act.hold.arm = b.arm && !armReq && !act.fired.arm && tNow > act.block ? (tNow - act.since.arm) / ARM_HOLD_MS : 0;
+}
+function onPress(a) {
+  switch (a) {
+    case "stop": doKill(); break;
+    case "arm": if (armReq) { act.fired.arm = true; doDisarm(true); } break;
+    case "trimUp": trimStep("p", 1); break;
+    case "trimDown": trimStep("p", -1); break;
+    case "trimLeft": trimStep("r", -1); break;
+    case "trimRight": trimStep("r", 1); break;
+    case "rates": cycleRates(); break;
+    case "marker": addMarker(); break;
+    case "stepRoll": startStep("roll"); break;
+    case "stepPitch": startStep("pitch"); break;
+    default: break;
+  }
+}
+const mineNow = () => !!(link.tel && (link.tel.state & S_ARMED) && (link.tel.state & S_YOU));
+function armBlockReason() {
+  const tm = link.tel;
+  if (!link.ready || !tm || now() - link.lastTel > TEL_WARN_MS) return t("disconnected");
+  if (!(tm.state & S_READY)) return t("armReasons")[1];
+  if (tm.state2 & S2_MOTOR_TEST) return t("armReasons")[7];
+  if (tm.state & S_OTHER) return t("armReasons")[4];
+  if (tm.state2 & S2_BAT_NOARM) return t("armReasons")[3];
+  if (input.source === "none") return t("noPad");
+  if (input.cmd.thrust > 0.02) return t("armReasons")[2];
+  return "";
+}
+function doArm() {
+  const why = armBlockReason();
+  if (why) { toast(why, "warn"); ALERTS.limit(); return; }
+  armReq = true; armSince = now(); input.flightSource = input.source;
+  render();
+}
+function doDisarm(fromPad) {
+  if (!armReq) return;
+  if (fromPad && mineNow() && input.cmd.thrust > 0.05) { toast(t("msgThrottleDown"), "warn"); ALERTS.limit(); return; }
+  armReq = false;
+  render();
+}
+function doKill() {
+  armReq = false; killUntil = now() + 400;
+  sendControl(F_KILL, true);
+  if (motorTest.running) { motorTest.running = 0; renderMotors(); }
+  toast(t("killSent"), "bad"); logEvent(t("evKill"), "bad"); ALERTS.stop();
+  render();
+}
+function cycleRates() {
+  settings.rates = (settings.rates + 1) % 3; saveSettings();
+  const n = t(RATE_KEYS[settings.rates]);
+  logEvent(t("evRates")(n)); ALERTS.rates(n);
+  $("setRates").value = String(settings.rates);
+  render();
+}
+
+// trim: stored on the drone, shown from the telemetry
+let trimShown = null, trimPendingUntil = 0;
+function trimNow() {
+  if (trimShown && now() < trimPendingUntil) return trimShown;
+  return link.tel ? { r: link.tel.trimR, p: link.tel.trimP } : { r: 0, p: 0 };
+}
+function trimAllowed() {        // in flight only the pilot may trim, as on the drone
+  const tm = link.tel;
+  return link.open && link.infoSeen && tm && now() - link.lastTel < TEL_WARN_MS && !((tm.state & S_ARMED) && !(tm.state & S_YOU));
+}
+function sendTrim(r, p) {
+  if (!trimAllowed() || !sendTrimFrame(r, p)) return false;
+  trimShown = { r, p }; trimPendingUntil = now() + 1000;
+  logEvent(t("evTrim")(fmtTrim(r), fmtTrim(p)));
+  renderTrim();
+  return true;
+}
+function trimStep(ax, d) {
+  const cur = trimNow(), max = (link.info && link.info.trimMax) || 50, step = d * TRIM_STEP;
+  const r = ax === "r" ? clamp(cur.r + step, -max, max) : cur.r;
+  const p = ax === "p" ? clamp(cur.p + step, -max, max) : cur.p;
+  if (r === cur.r && p === cur.p) { ALERTS.limit(); toast(t("trimLimit"), "warn"); return; }
+  if (sendTrim(r, p)) ALERTS.tick();
+}
+
+// level on the ground: the tilt the sensor reads becomes the trim
+const LEVEL_MS = 2000, LEVEL_MAX_SPREAD = 0.5, LEVEL_MAX_DEG = 5;
+let levelSamples = null, levelUntil = 0;
+function startLevel() {
+  if (levelSamples) return;
+  const tm = link.tel;
+  if (!trimAllowed() || (tm.state & S_ARMED)) { toast(t("levelNotNow"), "warn"); return; }
+  if (!(tm.state & S_READY)) { toast(t("msgCalibrating"), "warn"); return; }
+  levelSamples = []; levelUntil = now() + LEVEL_MS;
+  renderTrim();
+  setTimeout(finishLevel, LEVEL_MS + 100);
+}
+function finishLevel() {
+  const samples = levelSamples || [];
+  levelSamples = null;
+  renderTrim();
+  if (samples.length < 20) { toast(t("levelNoData"), "warn"); return; }
+  const span = (k) => Math.max(...samples.map((x) => x[k])) - Math.min(...samples.map((x) => x[k]));
+  if (span("r") > LEVEL_MAX_SPREAD || span("p") > LEVEL_MAX_SPREAD) { toast(t("levelMoved"), "warn"); return; }
+  const mean = (k) => samples.reduce((a, x) => a + x[k], 0) / samples.length;
+  const roll = mean("r"), pitch = mean("p");
+  if (Math.abs(roll) > LEVEL_MAX_DEG || Math.abs(pitch) > LEVEL_MAX_DEG) { toast(t("levelTooFar"), "bad"); return; }
+  // Roll trim (+ = right) is the roll reading; pitch trim (+ = forward, nose
+  // down) is minus the pitch reading (+ = nose up).
+  const r = Math.round(roll * 10), p = Math.round(-pitch * 10);
+  if (sendTrim(r, p)) { ALERTS.tick(); toast(t("levelDone")(fmtTrim(r), fmtTrim(p)), "ok"); }
+}
+
+let markers = 0;
+function addMarker() {
+  markers++;
+  logEvent(t("evMarker")(markers), "ok");
+  if (rec.cur) rec.cur.marker = markers;
+  ALERTS.tick();
+}
+
+// ===== the control loop: 50 Hz, independent of the screen refresh ==========
+let lastTick = now(), paused = "";
+function pauseReason() {
+  if (!(armReq || mineNow())) { input.flightSource = ""; return ""; }
+  if (document.hidden) return "hidden";
+  if (settings.blurPause && !document.hasFocus()) return "focus";
+  // A gamepad that drops out must not hand the flight to the keyboard.
+  if (input.source === "none" || (input.flightSource && input.source !== input.flightSource)) return "pad";
+  return "";
+}
+function controlTick() {
+  const tNow = now(), dt = Math.min(0.1, (tNow - lastTick) / 1000);
+  lastTick = tNow;
+  if (link.open && tNow - link.lastTel > TEL_DEAD_MS) { try { link.ws.close(); } catch (e) { /* closed */ } }
+  pollInput(tNow, dt);
+  runActions(tNow);
+  const why = pauseReason();
+  if (why) {
+    // One PAUSE frame, then silence: the drone levels out at once, then descends.
+    if (!paused) { sendControl(F_PAUSE); paused = why; logEvent(t("evPause")(t(PAUSE_TEXT[why])), "bad"); if (why === "pad") ALERTS.padLost(); }
+    else paused = why;
+  } else {
+    if (paused) { paused = ""; logEvent(t("evResume"), "ok"); }
+    sendControl(0);
+  }
+  recTick(tNow);
+  if (tNow - link.sentT >= 1000) { link.sentRate = link.sent - link.sentWin; link.sentWin = link.sent; link.sentT = tNow;
+    link.fastRate = link.fastFrames - link.fastWin; link.fastWin = link.fastFrames; }
+}
+const PAUSE_TEXT = { hidden: "pageHidden", focus: "focusLost", pad: "padLostMsg" };
+document.addEventListener("visibilitychange", () => { if (document.hidden && (armReq || mineNow())) controlTick(); });
+window.addEventListener("blur", () => { if (armReq || mineNow()) setTimeout(controlTick, 0); });
+window.addEventListener("pagehide", () => { if (motorTest.running) sendMotorTest(0, 0, 0); sendControl(F_PAUSE); });
+// ===== flight recorder ==========================================================
+const REC_COLS = ["time_s", "roll_deg", "pitch_deg", "yaw_deg", "roll_sp_deg", "pitch_sp_deg",
+  "gyro_roll_dps", "gyro_pitch_dps", "gyro_yaw_dps", "rate_sp_roll_dps", "rate_sp_pitch_dps", "rate_sp_yaw_dps",
+  "m1_pct", "m2_pct", "m3_pct", "m4_pct", "thrust_pct", "battery_v", "thrust_out_pct", "stage", "state", "state2",
+  "stick_roll", "stick_pitch", "stick_yaw", "stick_thrust", "rtt_ms", "marker"];
+const REC_MAX_ROWS = 200000;          // about 33 minutes at 100 Hz
+const rec = { list: [], cur: null, n: 0, offSince: 0 };
+function recStart(auto) {
+  rec.n++;
+  rec.cur = { n: rec.n, start: new Date(), t0: null, rows: [], marker: 0, vmin: Infinity, saved: false, auto,
+    fast: false, stop: "" };
+  renderRec();
+}
+function recStop() {
+  const r = rec.cur;
+  rec.cur = null; rec.offSince = 0;
+  if (r && r.rows.length) rec.list.unshift(r);
+  renderRec();
+}
+function recRow(tl, s) {
+  const r = rec.cur;
+  if (!r) return;
+  if (r.t0 === null) r.t0 = tl;
+  const tm = link.tel || {}, c = input.cmd;
+  if (tm.vbat > 0) r.vmin = Math.min(r.vmin, tm.vbat);
+  r.rows.push([(tl - r.t0) / 1000, s.roll, s.pitch, s.yaw, s.rollSp, s.pitchSp, s.gRoll, s.gPitch, s.gYaw,
+    s.rRoll, s.rPitch, s.rYaw, s.m1, s.m2, s.m3, s.m4, s.thrCmd, tm.vbat || null, tm.thrust !== undefined ? tm.thrust * 100 : null,
+    tm.stage, tm.state, tm.state2, c.roll, c.pitch, c.yaw, c.thrust, link.rtt >= 0 ? link.rtt : null, r.marker || null]);
+  r.marker = 0;
+  if (r.rows.length >= REC_MAX_ROWS) recStop();
+}
+function recOnFast(s, tl) { if (rec.cur) { rec.cur.fast = true; recRow(tl, s); } }
+function recOnTelemetry(tm, tl) {
+  // Without FAST samples (firmware before v0.3.0) the telemetry is the record.
+  if (rec.cur && !rec.cur.fast && now() - link.lastFast > 500) {
+    recRow(tl, { roll: tm.roll, pitch: tm.pitch, yaw: tm.yaw, rollSp: null, pitchSp: null, gRoll: null, gPitch: null,
+      gYaw: null, rRoll: null, rPitch: null, rYaw: null, m1: null, m2: null, m3: null, m4: null, thrCmd: null });
+  }
+}
+function recTick(tNow) {
+  const tm = link.tel;
+  const flying = !!(tm && tNow - link.lastTel < TEL_DEAD_MS && (tm.state & (S_ARMED | S_OTHER)));
+  if (settings.autoRec && flying && !rec.cur) recStart(true);
+  if (rec.cur && rec.cur.auto) {
+    if (flying) rec.offSince = 0;
+    else if (!rec.offSince) rec.offSince = tNow;
+    else if (tNow - rec.offSince > 3000) { rec.cur.stop = tm ? (t("stopReasons")[tm.stopReason] || "") : ""; recStop(); }
+  }
+}
+function csvNum(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "";
+  if (Number.isInteger(v)) return String(v);
+  return String(+v.toFixed(3));
+}
+function recCsv(r) {
+  const lines = ["# ESP-Drone ground station, " + r.start.toISOString() + (link.info ? `, ${link.info.device}, firmware ${link.info.fw}` : ""),
+    "# angles: roll + = right side down, pitch + = nose up; rates as the rate controller sees them (yaw + = counter-clockwise)",
+    "# thrust in % of the web control maximum, motors in % of full power; stick values -1..1, thrust 0..1",
+    REC_COLS.join(",")];
+  for (const row of r.rows) lines.push(row.map(csvNum).join(","));
+  return lines.join("\n") + "\n";
+}
+function recSave(r) {
+  download(`flight-${r.n}-${stamp(r.start)}.csv`, recCsv(r), "text/csv");
+  r.saved = true;
+  logEvent(t("evRecSaved")(r.n), "ok");
+  renderRec();
+}
+window.addEventListener("beforeunload", (e) => {
+  if (rec.list.some((r) => !r.saved)) { e.preventDefault(); e.returnValue = t("unsaved"); }
+});
+// ===== colours ==================================================================
+const css = {};
+function color(name) {
+  if (!(name in css)) css[name] = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
+  return css[name];
+}
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+
+// ===== plots ====================================================================
+const motorSeries = (w) => [1, 2, 3, 4].map((m) => ({ sig: "m" + m, color: "--c-m" + m, label: "M" + m, w }));
+const PLOTS = {
+  flight: [
+    { title: "pRoll", sym: true, minSpan: 6, series: [
+      { sig: "rollSp", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
+      { sig: "roll", alt: "tRoll", color: "--c-roll", label: "sActual", w: 1.7 }] },
+    { title: "pPitch", sym: true, minSpan: 6, series: [
+      { sig: "pitchSp", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
+      { sig: "pitch", alt: "tPitch", color: "--c-pitch", label: "sActual", w: 1.7 }] },
+    { title: "pThrust", range: [0, 100], series: motorSeries(0.9).concat([
+      { sig: "inThr", color: "--c-sp", dash: [2, 3], label: "sStick" },
+      { sig: "thrCmd", alt: "thrOut", color: "--c-thr", label: "sThrust", w: 1.8 }]) },
+    { title: "pBattery", auto: true, minSpan: 0.3, digits: 2, lines: batteryLines, series: [
+      { sig: "vbat", color: "--c-bat", label: "sVolt", w: 1.7 }] },
+  ],
+  tuning: [
+    { title: "pRollRate", sym: true, minSpan: 40, digits: 0, series: [
+      { sig: "rRoll", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
+      { sig: "gRoll", color: "--c-roll", label: "sGyro", w: 1.4 }] },
+    { title: "pPitchRate", sym: true, minSpan: 40, digits: 0, series: [
+      { sig: "rPitch", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
+      { sig: "gPitch", color: "--c-pitch", label: "sGyro", w: 1.4 }] },
+    { title: "pYawRate", sym: true, minSpan: 40, digits: 0, series: [
+      { sig: "rYaw", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
+      { sig: "gYaw", color: "--c-yaw", label: "sGyro", w: 1.4 }] },
+    { title: "pMotors", range: [0, 100], digits: 0, series: motorSeries(1.2) },
+  ],
+  link: [
+    { title: "pRtt", auto: true, zero: true, minSpan: 20, digits: 0, series: [{ sig: "rtt", color: "--c-rtt", label: "sRtt", w: 1.5 }] },
+    { title: "pDelay", auto: true, zero: true, minSpan: 20, digits: 0, series: [{ sig: "delay", color: "--c-delay", label: "sDelay", w: 1.5 }] },
+    { title: "pCmds", auto: true, zero: true, minSpan: 10, digits: 0, series: [
+      { sig: "rx", color: "--c-yaw", label: "sRx", w: 1.5 }, { sig: "drop", color: "--c-drop", label: "sDropped", w: 1.5 }] },
+  ],
+};
+function batteryLines() {
+  const b = link.info && link.info.battery;
+  if (!b || !b.land) return [];
+  return [{ v: b.land / 1000, color: "--bad", label: "sLand" }, { v: b.arm / 1000, color: "--warn", label: "sArmMin" }];
+}
+const plotView = { set: settings.plotSet, plots: [], frozen: null, hoverT: null };
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+}
+class Plot {
+  constructor(cfg) {
+    this.cfg = cfg; this.lo = null; this.hi = null;
+    this.canvas = document.createElement("canvas");
+    this.canvas.addEventListener("mousemove", (e) => {
+      const r = this.canvas.getBoundingClientRect(), x0 = 46, x1 = r.width - 10;
+      const f = (e.clientX - r.left - x0) / (x1 - x0);
+      plotView.hoverT = f >= 0 && f <= 1 ? plotView.tStart + f * (plotView.tEnd - plotView.tStart) : null;
+    });
+    this.canvas.addEventListener("mouseleave", () => { plotView.hoverT = null; });
+  }
+  pick(s, a, b) {          // the series itself, or its fallback when it has no data in view
+    const main = sig[s.sig];
+    if (main && main.len && main.lastT() >= a) return main;
+    return s.alt ? sig[s.alt] : main;
+  }
+  draw(a, b, isLast) {
+    const { ctx, w, h } = fitCanvas(this.canvas);
+    const cfg = this.cfg, x0 = 46, x1 = w - 10, y0 = 20, y1 = h - (isLast ? 16 : 6);
+    ctx.clearRect(0, 0, w, h);
+    if (y1 - y0 < 20) return;
+    const active = cfg.series.map((s) => ({ s, data: this.pick(s, a, b) }));
+    let mn = Infinity, mx = -Infinity;
+    for (const { data } of active) if (data) data.forEach(a, b, (tt, v) => { if (v < mn) mn = v; if (v > mx) mx = v; });
+    let lo, hi;
+    if (cfg.range) [lo, hi] = cfg.range;
+    else if (!Number.isFinite(mn)) { lo = cfg.sym ? -cfg.minSpan / 2 : 0; hi = cfg.sym ? cfg.minSpan / 2 : cfg.minSpan; }
+    else if (cfg.sym) { const m = Math.max(Math.abs(mn), Math.abs(mx), cfg.minSpan / 2) * 1.15; lo = -m; hi = m; }
+    else {
+      if (cfg.lines) for (const l of cfg.lines()) { mn = Math.min(mn, l.v); mx = Math.max(mx, l.v); }
+      const span = Math.max(mx - mn, cfg.minSpan), mid = (mx + mn) / 2;
+      lo = cfg.zero ? 0 : mid - span * 0.6; hi = cfg.zero ? Math.max(mx * 1.15, cfg.minSpan) : mid + span * 0.6;
+    }
+    // grow at once, shrink slowly: a calm axis
+    if (this.lo === null || cfg.range) { this.lo = lo; this.hi = hi; }
+    else {
+      this.lo = lo < this.lo ? lo : this.lo + (lo - this.lo) * 0.04;
+      this.hi = hi > this.hi ? hi : this.hi + (hi - this.hi) * 0.04;
+    }
+    lo = this.lo; hi = this.hi;
+    const X = (tt) => x0 + (tt - a) / (b - a) * (x1 - x0);
+    const Y = (v) => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+
+    // grid
+    ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle"; ctx.textAlign = "right";
+    const step = niceStep((hi - lo) / 4), dig = step < 1 ? (step < 0.1 ? 2 : 1) : 0;
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+      const y = Math.round(Y(v)) + 0.5;
+      ctx.strokeStyle = Math.abs(v) < step / 2 ? "#334255" : "#1c2633"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+      ctx.fillStyle = "#6e7d90"; ctx.fillText(num(v, dig), x0 - 6, y);
+    }
+    const win = (b - a) / 1000, tstep = win <= 6 ? 1 : win <= 12 ? 2 : win <= 30 ? 5 : 10;
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let s = 0; s <= win + 1e-6; s += tstep) {
+      const x = Math.round(X(b - s * 1000)) + 0.5;
+      ctx.strokeStyle = "#18212c"; ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+      if (isLast) { ctx.fillStyle = "#6e7d90"; ctx.fillText(s === 0 ? "0" : `−${s} s`, x, y1 + 3); }
+    }
+    // threshold lines
+    if (cfg.lines) for (const l of cfg.lines()) {
+      if (l.v < lo || l.v > hi) continue;
+      const y = Math.round(Y(l.v)) + 0.5;
+      ctx.strokeStyle = color(l.color); ctx.setLineDash([3, 4]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = color(l.color); ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillText(`${t(l.label)} ${num(l.v, 2)}`, x1 - 2, y - 2);
+    }
+    // series: per pixel column min/max, gaps over 300 ms break the line
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x0, y0 - 2, x1 - x0, y1 - y0 + 4); ctx.clip();
+    for (const { s, data } of active) {
+      if (!data || !data.len) continue;
+      ctx.strokeStyle = color(s.color); ctx.lineWidth = s.w || 1.2; ctx.setLineDash(s.dash || []);
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      let col = null, cMin = 0, cMax = 0, cLast = 0, lastT = -Infinity, started = false;
+      const flush = () => { if (col === null) return; ctx.lineTo(col, cMin); ctx.lineTo(col, cMax); ctx.lineTo(col, cLast); };
+      data.forEach(a - 200, b, (tt, v) => {
+        const x = Math.round(X(tt)), y = Y(v);
+        if (tt - lastT > 300) { flush(); col = null; ctx.moveTo(x, y); started = true; }
+        if (x !== col) { flush(); col = x; cMin = cMax = cLast = y; ctx.lineTo(x, y); }
+        else { if (y < cMin) cMin = y; if (y > cMax) cMax = y; cLast = y; }
+        lastT = tt;
+      });
+      flush();
+      if (started) ctx.stroke();
+    }
+    // the previous step test, grey, aligned to the current one
+    const ghost = stepGhost();
+    if (ghost) for (const { s } of active) {
+      const g = ghost.data[s.sig];
+      if (!g) continue;
+      ctx.strokeStyle = "rgba(160,172,188,.55)"; ctx.lineWidth = 1.3; ctx.setLineDash([]);
+      ctx.beginPath();
+      for (let i = 0; i < g.length; i += 2) { const x = X(ghost.t0 + g[i]), y = Y(g[i + 1]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+      ctx.stroke();
+    }
+    ctx.restore(); ctx.setLineDash([]);
+    // hover
+    const ht = plotView.hoverT;
+    if (ht !== null && ht >= a && ht <= b) {
+      const x = Math.round(X(ht)) + 0.5;
+      ctx.strokeStyle = "#8b9bb0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+    }
+    // title and legend with values (at the cursor or the newest)
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "600 12px system-ui, sans-serif";
+    ctx.fillStyle = "#b8c4d2"; ctx.fillText(t(cfg.title), x0, 9);
+    let lx = x0 + ctx.measureText(t(cfg.title)).width + 16;
+    ctx.font = "12px system-ui, sans-serif";
+    const dig2 = cfg.digits !== undefined ? cfg.digits : 1;
+    for (const { s, data } of active) {
+      const v = !data || !data.len ? NaN : ht !== null ? data.at(ht) : data.at(b);
+      const label = (s.label.startsWith("s") ? t(s.label) : s.label) + " " + (Number.isFinite(v) ? num(v, dig2) : "–");
+      ctx.strokeStyle = color(s.color); ctx.lineWidth = 2; ctx.setLineDash(s.dash || []);
+      ctx.beginPath(); ctx.moveTo(lx, 9.5); ctx.lineTo(lx + 14, 9.5); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = "#9fb0c2"; ctx.fillText(label, lx + 18, 9);
+      lx += 18 + ctx.measureText(label).width + 14;
+      if (lx > w - 40) break;
+    }
+    if (ghost && active.some(({ s }) => ghost.data[s.sig]) && lx < w - 90) {
+      ctx.strokeStyle = "rgba(160,172,188,.7)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(lx, 9.5); ctx.lineTo(lx + 14, 9.5); ctx.stroke();
+      ctx.fillStyle = "#9fb0c2"; ctx.fillText(t("sPrev"), lx + 18, 9);
+    }
+  }
+}
+function stepGhost() {
+  const h = step.shown && step.hist[step.shown];
+  if (!plotView.range || !h || h.length < 2) return null;
+  return { t0: h[0].t0, data: h[1].data };
+}
+function renderFreeze() {
+  const f = plotView.frozen !== null;
+  $("freeze").textContent = f ? t("live") : t("freeze");
+  $("freeze").classList.toggle("on", f);
+}
+function buildPlots() {
+  const box = $("plots");
+  box.textContent = "";
+  plotView.set = settings.plotSet in PLOTS ? settings.plotSet : "flight";
+  plotView.plots = PLOTS[plotView.set].map((cfg) => new Plot(cfg));
+  for (const p of plotView.plots) box.appendChild(p.canvas);
+  document.querySelectorAll("#plotTabs [data-set]").forEach((b) => b.classList.toggle("on", b.dataset.set === plotView.set));
+}
+function drawPlots() {
+  let a, b;
+  if (plotView.range) [a, b] = plotView.range;          // a held step response
+  else {
+    b = plotView.frozen !== null ? plotView.frozen : now() - 80;   // FAST samples come in 50 ms batches
+    a = b - settings.plotWin * 1000;
+  }
+  plotView.tStart = a; plotView.tEnd = b;
+  plotView.plots.forEach((p, i) => p.draw(a, b, i === plotView.plots.length - 1));
+  const noFast = link.infoSeen && proto() < 3 && plotView.set !== "link";
+  const note = $("plotNote");
+  note.style.display = noFast ? "block" : "none";
+  if (noFast) note.textContent = t("plotNoFast");
+}
+
+// ===== artificial horizon =======================================================
+function attitudeNow() {
+  const fresh = sig.roll.len && now() - link.lastFast < 400;
+  const tm = link.tel;
+  if (fresh) {
+    const armed = tm && (tm.state & (S_ARMED | S_OTHER));
+    return { roll: sig.roll.last(), pitch: sig.pitch.last(), yaw: sig.yaw.last(), sp: armed ? { roll: sig.rollSp.last(), pitch: sig.pitchSp.last() } : null };
+  }
+  if (tm && now() - link.lastTel < TEL_DEAD_MS) return { roll: tm.roll, pitch: tm.pitch, yaw: tm.yaw, sp: null };
+  return null;
+}
+function drawHorizon() {
+  const { ctx, w } = fitCanvas($("hz"));
+  const s = w, cx = s / 2, cy = s / 2, ppd = s / 64;
+  const att = attitudeNow();
+  ctx.clearRect(0, 0, s, s);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, s / 2 - 1, 0, Math.PI * 2); ctx.clip();
+  if (!att) {
+    ctx.fillStyle = "#18212c"; ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#5d6b7d"; ctx.font = "600 30px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("–", cx, cy);
+    ctx.restore();
+    return;
+  }
+  ctx.translate(cx, cy); ctx.rotate(-att.roll * Math.PI / 180); ctx.translate(0, att.pitch * ppd);
+  const sky = ctx.createLinearGradient(0, -s, 0, 0); sky.addColorStop(0, "#123a5e"); sky.addColorStop(1, "#3a7fb8");
+  const gnd = ctx.createLinearGradient(0, 0, 0, s); gnd.addColorStop(0, "#7a4f27"); gnd.addColorStop(1, "#3d2814");
+  ctx.fillStyle = sky; ctx.fillRect(-s * 1.5, -s * 2, s * 3, s * 2);
+  ctx.fillStyle = gnd; ctx.fillRect(-s * 1.5, 0, s * 3, s * 2);
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-s * 1.5, 0); ctx.lineTo(s * 1.5, 0); ctx.stroke();
+  ctx.lineWidth = 1.3; ctx.fillStyle = "#fff"; ctx.font = "11px system-ui"; ctx.textBaseline = "middle";
+  for (let p = -40; p <= 40; p += 5) {
+    if (!p) continue;
+    const y = -p * ppd, half = p % 10 ? s * 0.07 : s * 0.14;
+    ctx.strokeStyle = "rgba(255,255,255,.85)";
+    ctx.beginPath(); ctx.moveTo(-half, y); ctx.lineTo(half, y); ctx.stroke();
+    if (!(p % 10)) { ctx.textAlign = "right"; ctx.fillText(String(Math.abs(p)), -half - 4, y); ctx.textAlign = "left"; ctx.fillText(String(Math.abs(p)), half + 4, y); }
+  }
+  ctx.restore();
+  // roll scale, fixed to the airframe; the pointer turns with the horizon
+  ctx.save(); ctx.translate(cx, cy);
+  const R = s * 0.44;
+  ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, R, (-90 - 60) * Math.PI / 180, (-90 + 60) * Math.PI / 180); ctx.stroke();
+  for (const d of [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]) {
+    const a = (d - 90) * Math.PI / 180, len = d % 30 === 0 ? 10 : 6;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a) * R, Math.sin(a) * R); ctx.lineTo(Math.cos(a) * (R - len), Math.sin(a) * (R - len)); ctx.stroke();
+  }
+  ctx.rotate(-att.roll * Math.PI / 180);
+  ctx.fillStyle = "#e3b341";
+  ctx.beginPath(); ctx.moveTo(0, -R + 2); ctx.lineTo(-7, -R + 14); ctx.lineTo(7, -R + 14); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  // setpoint of the controller (flight director): where the airframe should be
+  if (att.sp && Number.isFinite(att.sp.roll)) {
+    ctx.save(); ctx.translate(cx, cy - (att.sp.pitch - att.pitch) * ppd);
+    ctx.rotate((att.sp.roll - att.roll) * Math.PI / 180);
+    ctx.strokeStyle = "#ff7bdc"; ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-s * 0.3, 0); ctx.lineTo(-s * 0.1, 0); ctx.moveTo(s * 0.1, 0); ctx.lineTo(s * 0.3, 0); ctx.stroke();
+    ctx.restore();
+  }
+  // airframe symbol
+  ctx.strokeStyle = "#ffd33d"; ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.27, cy); ctx.lineTo(cx - s * 0.1, cy); ctx.lineTo(cx - s * 0.1, cy + 9);
+  ctx.moveTo(cx + s * 0.27, cy); ctx.lineTo(cx + s * 0.1, cy); ctx.lineTo(cx + s * 0.1, cy + 9);
+  ctx.stroke();
+  ctx.fillStyle = "#ffd33d"; ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+}
+
+// ===== sticks ====================================================================
+function drawSticks() {
+  const { ctx, w, h } = fitCanvas($("sticks"));
+  ctx.clearRect(0, 0, w, h);
+  const r = input.raw, c = input.cmd, box = Math.min(100, h - 18), gap = (w - 22 - 2 * box) / 2;
+  const lx = 22 + gap * 0.5, rx = lx + box + gap, top = 2;
+  const mode1 = settings.mode === 1;
+  const left = { x: r.yaw, y: mode1 ? r.pitch : r.thr, cx: c.yaw, cy: mode1 ? c.pitch : null };
+  const right = { x: r.roll, y: mode1 ? r.thr : r.pitch, cx: c.roll, cy: mode1 ? null : c.pitch };
+  const drawBox = (x, st, label) => {
+    ctx.fillStyle = "#0d131a"; ctx.strokeStyle = "#2c3a4b"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(x, top, box, box, 10); ctx.fill(); ctx.stroke();
+    const mx = x + box / 2, my = top + box / 2, R = box / 2 - 9;
+    ctx.strokeStyle = "#1f2a36"; ctx.beginPath(); ctx.moveTo(x + 6, my); ctx.lineTo(x + box - 6, my); ctx.moveTo(mx, top + 6); ctx.lineTo(mx, top + box - 6); ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx, my, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "#6e7d90"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(mx + clamp(st.x, -1, 1) * R, my - clamp(st.y, -1, 1) * R, 8, 0, Math.PI * 2); ctx.stroke();
+    if (input.source !== "none") {
+      ctx.fillStyle = "#58a6ff";
+      const py = st.cy === null ? my - clamp(st.y, -1, 1) * R : my - clamp(st.cy, -1, 1) * R;
+      ctx.beginPath(); ctx.arc(mx + clamp(st.cx, -1, 1) * R, py, 4.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = "#6e7d90"; ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(label, mx, top + box + 3);
+  };
+  drawBox(lx, left, (mode1 ? t("pitch") : t("thrust")) + " · " + t("yaw"));
+  drawBox(rx, right, (mode1 ? t("thrust") : t("pitch")) + " · " + t("roll"));
+  // thrust bar
+  const bx = 4, bh = box, by = top;
+  ctx.fillStyle = "#0d131a"; ctx.strokeStyle = "#2c3a4b"; ctx.beginPath(); ctx.roundRect(bx, by, 12, bh, 4); ctx.fill(); ctx.stroke();
+  const fh = clamp(c.thrust, 0, 1) * (bh - 4);
+  ctx.fillStyle = armReq ? "#f0883e" : "#58a6ff"; ctx.beginPath(); ctx.roundRect(bx + 2, by + bh - 2 - fh, 8, fh, 2); ctx.fill();
+}
+
+// ===== gamepad schematic (controller panel) =========================================
+function drawPadView() {
+  const { ctx, w, h } = fitCanvas($("padView"));
+  ctx.clearRect(0, 0, w, h);
+  const pad = input.pad;
+  ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  if (!pad) { ctx.fillStyle = "#5d6b7d"; ctx.fillText(settings.keyboard ? t("keyboard") : t("noPad"), w / 2, h / 2); return; }
+  const bt = (i) => input.btnState[i] || 0;
+  const on = (i) => bt(i) > 0.5;
+  if (!input.standard) {    // unknown layout: bars and numbered buttons
+    const n = Math.min(input.axes.length, 8);
+    for (let i = 0; i < n; i++) {
+      const y = 10 + i * 15, v = input.axes[i];
+      ctx.fillStyle = "#6e7d90"; ctx.textAlign = "right"; ctx.fillText(String(i), 22, y + 5);
+      ctx.fillStyle = "#1c2633"; ctx.fillRect(28, y, 130, 10);
+      ctx.fillStyle = "#58a6ff"; ctx.fillRect(93, y, v * 65, 10);
+    }
+    const nb = Math.min(input.btnState.length, 24);
+    for (let i = 0; i < nb; i++) {
+      const x = 180 + (i % 6) * 26, y = 12 + Math.floor(i / 6) * 26;
+      ctx.fillStyle = on(i) ? "#58a6ff" : "#1c2633"; ctx.beginPath(); ctx.roundRect(x, y, 22, 20, 5); ctx.fill();
+      ctx.fillStyle = on(i) ? "#0a0e13" : "#8b9bb0"; ctx.textAlign = "center"; ctx.fillText(String(i), x + 11, y + 10.5);
+    }
+    return;
+  }
+  const L = LABELS[input.family] || LABELS.generic;
+  const sx = w / 340, sy = h / 150;
+  ctx.save(); ctx.scale(sx, sy);
+  // body
+  ctx.fillStyle = "#16202b"; ctx.strokeStyle = "#2c3a4b"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(60, 28); ctx.lineTo(280, 28); ctx.quadraticCurveTo(325, 30, 330, 100);
+  ctx.quadraticCurveTo(334, 142, 300, 144); ctx.quadraticCurveTo(270, 145, 245, 112); ctx.lineTo(95, 112);
+  ctx.quadraticCurveTo(70, 145, 40, 144); ctx.quadraticCurveTo(6, 142, 10, 100); ctx.quadraticCurveTo(15, 30, 60, 28);
+  ctx.fill(); ctx.stroke();
+  const btn = (x, y, i, r, label) => {
+    ctx.fillStyle = on(i) ? "#58a6ff" : "#0d131a"; ctx.strokeStyle = "#3d5068";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = on(i) ? "#0a0e13" : "#c9d1d9"; ctx.font = `${r > 9 ? 11 : 9}px system-ui`;
+    ctx.fillText(label, x, y + 0.5);
+  };
+  const shoulder = (x, i, j) => {      // bumper i, analog trigger j
+    ctx.fillStyle = "#0d131a"; ctx.strokeStyle = "#3d5068";
+    ctx.beginPath(); ctx.roundRect(x, 4, 52, 10, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#58a6ff"; ctx.fillRect(x + 1, 5, 50 * bt(j), 8);
+    ctx.fillStyle = "#c9d1d9"; ctx.font = "9px system-ui"; ctx.fillText(L[j], x + 26, 9.5);
+    ctx.fillStyle = on(i) ? "#58a6ff" : "#0d131a"; ctx.beginPath(); ctx.roundRect(x, 16, 52, 9, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = on(i) ? "#0a0e13" : "#c9d1d9"; ctx.fillText(L[i], x + 26, 21);
+  };
+  shoulder(40, 4, 6); shoulder(248, 5, 7);
+  // d-pad
+  [[60, 50, 12], [60, 82, 13], [44, 66, 14], [76, 66, 15]].forEach(([x, y, i]) => {
+    ctx.fillStyle = on(i) ? "#58a6ff" : "#0d131a"; ctx.strokeStyle = "#3d5068";
+    ctx.beginPath(); ctx.roundRect(x - 8, y - 8, 16, 16, 3); ctx.fill(); ctx.stroke();
+  });
+  // face buttons by position
+  btn(282, 50, 3, 10, L[3]); btn(302, 68, 1, 10, L[1]); btn(282, 86, 0, 10, L[0]); btn(262, 68, 2, 10, L[2]);
+  btn(140, 50, 8, 7, ""); btn(200, 50, 9, 7, ""); btn(170, 70, 16, 7, "");
+  ctx.fillStyle = "#8b9bb0"; ctx.font = "9px system-ui"; ctx.fillText(L[8], 140, 38); ctx.fillText(L[9], 200, 38);
+  // sticks
+  const stick = (x, y, ax, ay, i) => {
+    ctx.fillStyle = "#0d131a"; ctx.strokeStyle = on(i) ? "#58a6ff" : "#3d5068"; ctx.lineWidth = on(i) ? 2.5 : 1.5;
+    ctx.beginPath(); ctx.arc(x, y, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#58a6ff"; ctx.beginPath(); ctx.arc(x + (input.axes[ax] || 0) * 14, y + (input.axes[ay] || 0) * 14, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 1.5;
+  };
+  stick(118, 90, 0, 1, 10); stick(222, 90, 2, 3, 11);
+  ctx.restore();
+}
+
+// ===== panels =====================================================================
+function renderPadPanel() {
+  const sel = $("padSelect");
+  const opts = input.list.map((p) => `<option value="${esc(p.id)}">${esc(padInfo(p.id).name)}${p.mapping === "standard" ? "" : " (?)"}</option>`);
+  opts.push(`<option value="keyboard">${esc(t("keyboard"))}</option>`);
+  sel.innerHTML = opts.join("");
+  sel.value = input.pad ? input.pad.id : settings.padKey === "keyboard" ? "keyboard" : "";
+  $("padNote").textContent = input.pad ? (input.standard ? t("padStandard") : t("padCustom")) : t("padNone");
+  renderBindTable();
+}
+function renderBindTable() {
+  const b = bindings(), rows = [];
+  const list = (input.pad && !input.standard ? STICKS : []).concat(ACTIONS);
+  for (const a of list) {
+    const learning = learn.action === a;
+    const chip = learning ? (STICKS.includes(a) ? t("learnAxis")(a === "throttle" || a === "pitch" ? t("dirUp") : t("dirRight")) : t("learnButton")) : bindingLabel(b[a]);
+    rows.push(`<tr class="${learning ? "learn" : ""}"><td>${esc(t(ACTION_TEXT[a]))}</td><td><span class="binding">${esc(chip)}</span></td>` +
+      `<td><button data-learn="${a}" ${input.pad && !armReq ? "" : "disabled"}>${esc(t("change"))}</button></td></tr>`);
+  }
+  $("bindTable").innerHTML = rows.join("");
+}
+function renderGains() {
+  const tbl = $("gainTable");
+  const old = link.infoSeen && proto() < 3;
+  $("tuneOld").style.display = old ? "block" : "none";
+  if (!tbl.dataset.built) {
+    let html = `<tr><th></th>${["P", "I", "D"].map((x) => `<th style="text-align:center">${x}</th>`).join("")}</tr>`;
+    LOOPS.forEach((l, li) => {
+      html += `<tr><th colspan="4" class="grp" data-gloop="${li}"></th></tr>`;
+      AXES.forEach((ax, ai) => {
+        html += `<tr><td class="ax" data-gax="${ai}"></td>`;
+        for (const k of TERMS) html += `<td><input data-gain="pid_${l}.${ax}_${k}" inputmode="decimal"></td>`;
+        html += "</tr>";
+      });
+    });
+    tbl.innerHTML = html;
+    tbl.dataset.built = "1";
+    tbl.querySelectorAll("input").forEach((el) => {
+      el.addEventListener("change", () => onGainInput(el));
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.blur(); });
+    });
+  }
+  tbl.querySelectorAll("[data-gax]").forEach((el) => { el.textContent = t("gAxis")[+el.dataset.gax]; });
+  tbl.querySelectorAll("[data-gloop]").forEach((el) => { el.textContent = t(+el.dataset.gloop ? "gAtt" : "gRate"); });
+  $("stepHelp").textContent = t("stepHelp")(actionLabel("stepRoll"), actionLabel("stepPitch"));
+  const flying = mineNow();
+  $("stepRollBtn").disabled = $("stepPitchBtn").disabled = !flying || proto() < 3;
+  tbl.querySelectorAll("input[data-gain]").forEach((el) => {
+    const n = el.dataset.gain, g = gains[n];
+    const edit = gainEdits[n];
+    if (document.activeElement !== el) el.value = edit !== undefined ? fmtGain(edit) : g ? fmtGain(g.value) : "";
+    el.disabled = old || !g || !g.writable;
+    const cur = edit !== undefined ? edit : g ? g.value : null;
+    el.classList.toggle("changed", !!(g && g.dflt !== null && cur !== null && Math.abs(cur - g.dflt) > 1e-6 * Math.max(1, g.dflt)));
+    el.classList.toggle("pending", edit !== undefined);
+    el.title = g && g.dflt !== null ? `${n} · default ${fmtGain(g.dflt)}` : n;
+  });
+  const pending = Object.keys(gainEdits).length;
+  $("gainState").textContent = !link.infoSeen || old ? "" : Object.keys(gains).length < GAIN_NAMES.length ? "…" :
+    (gainsStored ? t("gainStored") : t("gainDefault")) + (pending ? " " + t("gainPending")(pending) : "");
+  $("gainApply").disabled = !pending || old;
+  ["gainRead", "gainSave", "gainReset"].forEach((id) => { $(id).disabled = old || !link.infoSeen; });
+}
+function fmtGain(v) { return String(+v.toPrecision(4)); }
+function onGainInput(el) {
+  const n = el.dataset.gain, v = parseFloat(el.value.replace(",", "."));
+  const g = gains[n];
+  if (!Number.isFinite(v) || v < 0 || v > 5000) { renderGains(); return; }
+  const names = [n];
+  if (settings.linkRP && n.includes(".roll_")) names.push(n.replace(".roll_", ".pitch_"));
+  for (const x of names) {
+    if (g && Math.abs(v - (gains[x] ? gains[x].value : NaN)) < 1e-9) delete gainEdits[x];
+    else gainEdits[x] = v;
+  }
+  if (settings.liveGains) applyGains();
+  renderGains();
+}
+function applyGains() { for (const n of Object.keys(gainEdits)) sendParam(P_WRITE, n, gainEdits[n]); }
+
+let resetArmedUntil = 0;
+function buildMotorSvg() {
+  const svg = $("motorSvg"), ns = "http://www.w3.org/2000/svg";
+  let html = `<defs><marker id="ah" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">` +
+    `<path d="M0 0L10 5L0 10z" fill="#8b9bb0"/></marker></defs>` +
+    `<line x1="78" y1="78" x2="222" y2="222" stroke="#2c3a4b" stroke-width="9" stroke-linecap="round"/>` +
+    `<line x1="222" y1="78" x2="78" y2="222" stroke="#2c3a4b" stroke-width="9" stroke-linecap="round"/>` +
+    `<rect x="118" y="112" width="64" height="76" rx="12" fill="#16202b" stroke="#3d5068"/>` +
+    `<path d="M150 120l9 13h-18z" fill="#58a6ff"/>` +
+    `<text id="mFront" x="150" y="22" fill="#58a6ff" font-size="12" font-weight="700" text-anchor="middle"></text>` +
+    `<path d="M150 30v10" stroke="#58a6ff" stroke-width="2"/>`;
+  MOTORS.forEach((m, i) => {
+    // arrow along the disc in the turning direction
+    const r = 52, a0 = -150, a1 = -30, cw = m.dir === "cw";
+    const p = (a) => [m.x + r * Math.cos(a * Math.PI / 180), m.y + r * Math.sin(a * Math.PI / 180)];
+    const [sx, sy] = p(cw ? a0 : a1), [ex, ey] = p(cw ? a1 : a0);
+    html += `<g class="motor ${m.dir}" data-motor="${i}"><title></title>` +
+      `<circle class="ring" cx="${m.x}" cy="${m.y}" r="44" fill="#0d131a" stroke="#2c3a4b" stroke-width="2" stroke-dasharray="4 4"/>` +
+      `<circle class="level" cx="${m.x}" cy="${m.y}" r="38" fill="none" stroke="#3fb950" stroke-width="5" stroke-dasharray="0 999" transform="rotate(-90 ${m.x} ${m.y})"/>` +
+      `<g class="blade"><rect x="${m.x - 34}" y="${m.y - 3}" width="68" height="6" rx="3" fill="#3d5068"/>` +
+      `<rect x="${m.x - 3}" y="${m.y - 34}" width="6" height="68" rx="3" fill="#3d5068"/></g>` +
+      `<circle cx="${m.x}" cy="${m.y}" r="15" fill="#1f2a36" stroke="#58a6ff" stroke-width="1.5"/>` +
+      `<text x="${m.x}" y="${m.y + 4}" fill="#e6edf3" font-size="12" font-weight="700" text-anchor="middle">M${i + 1}</text>` +
+      `<path d="M${sx.toFixed(1)} ${sy.toFixed(1)}A${r} ${r} 0 0 ${cw ? 1 : 0} ${ex.toFixed(1)} ${ey.toFixed(1)}" fill="none" stroke="#8b9bb0" stroke-width="2" marker-end="url(#ah)"/>` +
+      `</g>`;
+  });
+  svg.innerHTML = html;
+  svg.querySelectorAll(".motor").forEach((g) => g.addEventListener("click", () => startMotorTest(1 << +g.dataset.motor)));
+  void ns;
+}
+function motorTestBlock() {
+  const tm = link.tel, mt = link.info && link.info.motorTest;
+  if (!link.infoSeen || !tm || now() - link.lastTel > TEL_WARN_MS) return t("disconnected");
+  if (proto() < 3) return t("mtNeedsV3");
+  if (!mt || !mt.maxPercent) return t("mtDisabled");
+  if (!$("propsOff").checked) return t("mtNeedProps");
+  if (tm.state & (S_ARMED | S_OTHER)) return t("mtStatus")[2];
+  if (!(tm.state & S_READY)) return t("mtStatus")[1];
+  return "";
+}
+function startMotorTest(mask) {
+  const why = motorTestBlock();
+  if (why) { toast(why, "warn"); $("mtStatus").textContent = why; return; }
+  sendMotorTest(mask, settings.mtPower, settings.mtTime);
+  ALERTS.motor();
+}
+function renderMotors() {
+  const svg = $("motorSvg");
+  if (!svg.firstChild) return;
+  const old = link.infoSeen && proto() < 3, mt = link.info && link.info.motorTest;
+  $("motorOld").style.display = old || (link.infoSeen && mt && !mt.maxPercent) ? "block" : "none";
+  $("motorOld").textContent = old ? t("mtNeedsV3") : t("mtDisabled");
+  const max = (mt && mt.maxPercent) || 30;
+  const pw = $("mtPower");
+  if (+pw.max !== max) { pw.max = String(max); settings.mtPower = Math.min(settings.mtPower, max); pw.value = settings.mtPower; }
+  svg.classList.toggle("disabled", !!motorTestBlock());
+  $("mFront").textContent = t("front");
+  const fast = sig.m1.len && now() - link.lastFast < 400;
+  svg.querySelectorAll(".motor").forEach((g) => {
+    const i = +g.dataset.motor, m = MOTORS[i];
+    g.querySelector("title").textContent = `${t("motorNames")[i]} · ${t(m.dir)}`;
+    const running = (motorTest.running & (1 << i)) && now() < motorTest.until + 300;
+    g.classList.toggle("spin", !!running);
+    const lvl = fast ? sig["m" + (i + 1)].last() : running ? motorTest.percent : 0;
+    g.querySelector(".level").setAttribute("stroke-dasharray", `${(2 * Math.PI * 38 * clamp(lvl, 0, 100) / 100).toFixed(1)} 999`);
+  });
+  $("mtAll").disabled = !!motorTestBlock();
+  $("mtStop").disabled = !motorTest.running;
+  if (motorTest.running && now() > motorTest.until + 300) { motorTest.running = 0; $("mtStatus").textContent = t("mtStopped"); }
+}
+function renderRec() {
+  const box = $("recList");
+  $("recBtn").textContent = rec.cur && !rec.cur.auto ? t("recStop") : rec.cur ? t("recRunning") : t("recStart");
+  $("recBtn").classList.toggle("on", !!rec.cur);
+  const items = [];
+  const one = (r, live) => {
+    const rows = r.rows.length, dur = rows ? mmss((r.rows[rows - 1][0]) * 1000) : "0:00";
+    const vmin = Number.isFinite(r.vmin) ? num(r.vmin, 2) : "";
+    return `<div class="rec"><div><b>${esc(t("recTitle")(r.n, clock(r.start)))}</b>${live ? ` <span class="badc">● ${esc(t("recRunning"))}</span>` : ""}<br>` +
+      `<small>${esc(t("recInfo")(dur, rows, vmin))}${r.stop ? " · " + esc(r.stop) : ""}</small></div>` +
+      (live ? "" : `<div class="btns"><button data-csv="${r.n}" class="${r.saved ? "" : "primary"}">${esc(t("csv"))}</button><button data-del="${r.n}">${esc(t("del"))}</button></div>`) + "</div>";
+  };
+  if (rec.cur) items.push(one(rec.cur, true));
+  for (const r of rec.list) items.push(one(r, false));
+  box.innerHTML = items.length ? items.join("") : `<div class="note">${esc(t("recNone"))}</div>`;
+}
+function renderLog() {
+  if (renderLog.busy) return;
+  renderLog.busy = true;
+  requestAnimationFrame(() => {
+    renderLog.busy = false;
+    const last = logEntries.slice(-200).reverse();
+    const row = (e) => `<div class="lvl-${e.lvl}"><span class="t">${clock(e.d)}</span><span>${esc(e.text)}</span></div>`;
+    if ($("panel-log").classList.contains("on")) $("logList").innerHTML = last.map(row).join("");
+    $("ticker").innerHTML = last.slice(0, 5).map((e) => `<div class="lvl-${e.lvl}"><span class="faint">${clock(e.d)}</span> ${esc(e.text)}</div>`).join("");
+  });
+}
+function renderDrone() {
+  const j = link.info, tm = link.tel;
+  const live = link.open && tm && now() - link.lastTel < TEL_WARN_MS;
+  const dl = (pairs) => pairs.filter((p) => p[1] !== null && p[1] !== undefined).map(([k, v]) => `<dt>${esc(t(k))}</dt><dd>${esc(v)}</dd>`).join("");
+  $("linkStats").innerHTML = dl([
+    ["lStatus", link.open ? t("connectedTo")(link.address) : t("notConnected")],
+    ["lRtt", live && link.rtt >= 0 ? `${Math.round(link.rtt)} ms (${Math.round(link.rttMin)}–${Math.round(link.rttMax)})` : "–"],
+    ["lRates", live ? `${link.sentRate} / ${tm.rxRate} /s` : "–"],
+    ["lStale", live ? String(tm.stale) : "–"],
+    ["lFast", proto() >= 3 && live ? `${link.fastRate * 5} /s` : null],
+  ]);
+  if (!j) { $("droneInfo").innerHTML = ""; return; }
+  $("droneInfo").innerHTML = dl([
+    ["lDevice", j.device], ["lFirmware", j.fw], ["lProtocol", String(j.proto)],
+    ["lUptime", tm ? hms(tm.uptime) : "–"], ["lLimits", t("limitsInfo")(j)],
+    ["lFailsafe", j.failsafe ? t("fsInfo")(j.failsafe) : null], ["lBattery", j.battery ? t("batInfo")(j.battery) : null],
+    ["lMotorTest", j.proto >= 3 ? t("mtInfo")(j.motorTest) : null], ["lGains", j.proto >= 3 ? t("gainsInfo")(gainsStored) : null],
+  ]);
+}
+function renderPanels() { renderGains(); renderMotors(); renderRec(); renderDrone(); }
+// ===== status bar, message line, flight column =========================================
+let toastUntil = 0, toastText = "", toastCls = "info";
+function toast(text, cls) { toastText = text; toastCls = cls || "info"; toastUntil = now() + 2600; render(); }
+function renderTrim() {
+  const tr = trimNow(), set = tr.r !== 0 || tr.p !== 0, ok = trimAllowed();
+  $("trimR").textContent = fmtTrim(tr.r); $("trimP").textContent = fmtTrim(tr.p);
+  $("trimVals").classList.toggle("set", set);
+  document.querySelectorAll("#trimPad button").forEach((b) => { b.disabled = !ok; });
+  const lv = $("level");
+  lv.textContent = levelSamples ? t("levelBusy") : t("level");
+  lv.disabled = !!levelSamples || !ok || !!(link.tel && (link.tel.state & S_ARMED));
+  $("trimHint").textContent = input.pad ? t("trimPadHint")() : "";
+  $("levelHint").textContent = input.pad ? t("levelHint")(actionLabel("level")) : "";
+}
+function render() {
+  const tNow = now(), tm = link.tel;
+  const live = link.open && tm && tNow - link.lastTel < TEL_WARN_MS;
+  // connection
+  $("cdot").className = "dot " + (live ? (link.rtt < 80 ? "ok" : "warn") : link.open ? "warn" : "");
+  $("ctext").textContent = !link.open ? t("disconnected") : !live ? (link.infoSeen ? t("poorLink") : t("connecting")) : t("rttMs")(Math.round(link.rtt));
+  // battery
+  if (tm && tm.vbat > 0) {
+    const pc = batteryPercent(tm.vbat), low = (tm.state & S_LOWBAT) || (tm.state2 & (S2_BAT_LAND | S2_BAT_NOARM));
+    $("batText").textContent = `${num(tm.vbat, 2)} V · ${pc} %`;
+    $("batFill").style.width = pc + "%";
+    $("batFill").style.background = low ? "var(--bad)" : pc < 30 ? "var(--warn)" : "var(--ok)";
+    $("batText").style.color = low ? "var(--bad)" : "";
+  } else { $("batText").textContent = t("batteryNone"); $("batFill").style.width = "0"; $("batText").style.color = ""; }
+  // state
+  const mine = !!(tm && (tm.state & S_ARMED) && (tm.state & S_YOU));
+  const st = $("state");
+  st.textContent = !tm ? "–" : mine ? t("armedState") : (tm.state2 & S2_MOTOR_TEST) ? t("motorTestState") :
+    (tm.state & (S_OTHER | S_ARMED)) ? t("otherPilot") : (tm.state & S_READY) ? t("disarmed") : t("notReady");
+  st.classList.toggle("armed", mine);
+  $("timerText").textContent = mmss(flightStart ? tNow - flightStart : lastFlightMs);
+  // input device
+  $("padDot").className = "dot " + (input.source === "pad" ? "ok" : input.source === "keyboard" ? "warn" : "off");
+  $("padText").textContent = input.source === "pad" ? input.padName : input.source === "keyboard" ? t("keyboard") : t("noPad");
+  $("ratesPill").textContent = t("ratesPill")(t(RATE_KEYS[settings.rates]),
+    Math.round(((link.info && link.info.maxAngle) || 15) * RATE_SCALE[settings.rates]));
+  const sOn = settings.sound || settings.voice, blocked = audio.ctx && audio.ctx.state !== "running";
+  $("soundBtn").textContent = sOn && !blocked ? "🔊" : "🔇";
+  $("soundBtn").title = !sOn ? t("soundOff") : blocked ? t("soundBlocked") : t("soundOn");
+  // attitude numbers
+  const att = attitudeNow();
+  $("aRoll").textContent = att ? signed(att.roll, 1) + "°" : "–";
+  $("aPitch").textContent = att ? signed(att.pitch, 1) + "°" : "–";
+  $("aThr").textContent = tm ? Math.round(tm.thrust * 100) + " %" : "–";
+  $("hdg").textContent = att ? t("heading")((Math.round(360 - att.yaw) % 360 + 360) % 360) : "";
+  const maxA = (link.info && link.info.maxAngle) || 15;
+  $("inLeft").textContent = `${t("thrust")} ${Math.round(input.cmd.thrust * 100)} %` +
+    (hover.seconds >= 3 ? ` · ${t("hoverEst")(Math.round(hover.value * 100))}` : "");
+  $("inRight").textContent = `${t("rollShort")} ${signed(input.cmd.roll * maxA, 1)}° · ${t("pitchShort")} ${signed(input.cmd.pitch * maxA, 1)}°`;
+  // arm button
+  const armBtn = $("arm"), label = armBtn.querySelector("span"), why = armBlockReason();
+  armBtn.classList.toggle("armed", armReq);
+  const hold = Math.max(act.hold.arm || 0, mouseArm.since ? (tNow - mouseArm.since) / ARM_HOLD_MS : 0);
+  armBtn.querySelector(".fill").style.width = armReq ? "0" : clamp(hold, 0, 1) * 100 + "%";
+  if (armReq) { label.textContent = t("disarm"); armBtn.disabled = false; }
+  else if (tm && (tm.state & S_READY) && !(tm.state & S_OTHER) && !(tm.state2 & S2_MOTOR_TEST) && !(tm.state2 & S2_BAT_NOARM) && live) {
+    label.textContent = t("arm"); armBtn.disabled = false;
+  } else {
+    label.textContent = !tm || !live ? t("notReady") : (tm.state2 & S2_BAT_NOARM) ? t("batteryEmpty") :
+      (tm.state & S_OTHER) || (tm.state2 & S2_MOTOR_TEST) ? t("inUse") : t("notReady");
+    armBtn.disabled = true;
+  }
+  $("armHint").textContent = input.pad ? (armReq ? t("pressHint")(actionLabel("arm")) : t("holdHint")(actionLabel("arm"))) : "";
+  $("killHint").textContent = input.pad ? actionLabel("stop") + " · Esc" : "Esc";
+  renderTrim();
+  // message line
+  const m = $("msg");
+  let text = "", cls = "info";
+  const batLand = !!(mine && (tm.state2 & S2_BAT_LAND));
+  if (paused && (mine || armReq)) { text = t(PAUSE_TEXT[paused]); cls = "bad"; }
+  else if (tNow < toastUntil) { text = toastText; cls = toastCls; }
+  else if (!live && location.protocol === "https:" && !link.open) { text = t("msgHttps"); cls = "bad"; }
+  else if (!live) { text = link.open && link.infoSeen ? t("msgPoorLink") : t("msgNoLink")(link.address || settings.drone); cls = "bad"; }
+  else if (mine && tm.stage >= 1) { text = t("stages")[tm.stage]; cls = tm.stage >= 2 ? "bad" : "warn"; }
+  else if (batLand) { text = t("msgBatLand"); cls = "bad"; }
+  else if (tm.state & S_TUMBLED) { text = t("msgTumbled"); cls = "bad"; }
+  else if (mine && (tm.state & S_LOWBAT)) { text = t("msgBatLow"); cls = "warn"; }
+  else if (!mine && ((tm.state2 & S2_BAT_NOARM) || (tm.state & S_LOWBAT))) { text = t("msgBatEmpty"); cls = "warn"; }
+  else if (tm.state2 & S2_MOTOR_TEST) { text = t("msgMotorTest"); cls = "warn"; }
+  else if (tm.state & (S_OTHER | S_ARMED) && !mine) { text = t("msgOther"); cls = "warn"; }
+  else if (!(tm.state & S_READY)) { text = t("msgCalibrating"); cls = "warn"; }
+  else if (input.source === "none") { text = t("noPad"); cls = "warn"; }
+  else if (mine) { text = t("msgFlying"); cls = "ok"; }
+  else { text = t("msgIdle")(input.pad ? actionLabel("arm") : t("arm")); cls = "info"; }
+  m.textContent = text; m.className = cls;
+  // overlay while the window cannot fly
+  const ov = $("overlay");
+  const showOv = !!paused && (mine || armReq) && paused !== "hidden";
+  ov.style.display = showOv ? "flex" : "none";
+  if (showOv) $("overlayBox").innerHTML = `<h2 class="badc">⚠</h2><p>${esc(t(paused === "pad" && !input.pad && input.hadPad ? "padLostMsg" : PAUSE_TEXT[paused]))}</p>` +
+    (paused === "pad" ? `<p class="dim">${esc(t("padNeeded"))}</p>` : "");
+}
+function frame() {
+  drawPlots(); drawHorizon(); drawSticks();
+  if ($("panel-pad").classList.contains("on")) drawPadView();
+  requestAnimationFrame(frame);
+}
+
+// ===== wiring ===========================================================================
+const mouseArm = { since: 0, timer: 0 };
+$("arm").addEventListener("pointerdown", () => {
+  if (armReq) { doDisarm(false); return; }
+  const why = armBlockReason();
+  if (why) { toast(why, "warn"); return; }
+  mouseArm.since = now();
+  clearTimeout(mouseArm.timer);
+  mouseArm.timer = setTimeout(() => { if (mouseArm.since) { mouseArm.since = 0; doArm(); } }, ARM_HOLD_MS);
+});
+["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("arm").addEventListener(ev, () => { mouseArm.since = 0; clearTimeout(mouseArm.timer); }));
+$("kill").addEventListener("pointerdown", doKill);
+document.querySelectorAll("#trimPad button[data-ax]").forEach((b) => b.addEventListener("click", () => trimStep(b.dataset.ax, +b.dataset.d)));
+let trimZeroTimer = 0;
+$("trimZero").addEventListener("pointerdown", () => {
+  clearTimeout(trimZeroTimer);
+  trimZeroTimer = setTimeout(() => { if (sendTrim(0, 0)) { ALERTS.tick(); toast(t("trimReset"), "info"); } }, 700);
+});
+["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("trimZero").addEventListener(ev, () => clearTimeout(trimZeroTimer)));
+$("level").addEventListener("click", startLevel);
+document.querySelectorAll("#plotTabs [data-set]").forEach((b) => b.addEventListener("click", () => {
+  settings.plotSet = b.dataset.set; saveSettings(); buildPlots();
+}));
+$("plotWin").addEventListener("change", (e) => { settings.plotWin = +e.target.value; saveSettings(); });
+$("freeze").addEventListener("click", () => {
+  plotView.frozen = plotView.frozen === null ? now() - 80 : null;
+  plotView.range = null;
+  renderFreeze();
+});
+function showPanel(name) {
+  settings.panel = name; saveSettings();
+  document.querySelectorAll("#panelTabs [data-panel]").forEach((b) => b.classList.toggle("on", b.dataset.panel === name));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("on", p.id === "panel-" + name));
+  if (name === "log") renderLog();
+  if (name === "tune" && settings.plotSet !== "tuning" && proto() >= 3) { settings.plotSet = "tuning"; buildPlots(); }
+  renderPanels();
+}
+document.querySelectorAll("#panelTabs [data-panel]").forEach((b) => b.addEventListener("click", () => showPanel(b.dataset.panel)));
+// controller settings
+$("padSelect").addEventListener("change", (e) => {
+  settings.padKey = e.target.value;
+  if (settings.padKey === "keyboard") { settings.keyboard = true; $("setKeyboard").checked = true; }
+  saveSettings(); input.padId = "_";
+});
+const bindSetting = (id, key, conv, after) => {
+  const el = $(id);
+  const show = () => { if (el.type === "checkbox") el.checked = !!settings[key]; else el.value = String(settings[key]); if (after) after(); };
+  el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
+    settings[key] = el.type === "checkbox" ? el.checked : conv(el.value); saveSettings(); show(); renderBindTable(); render();
+  });
+  show();
+};
+const pct = (v) => Math.round(v * 100) + " %";
+bindSetting("setMode", "mode", Number);
+bindSetting("setThrottle", "throttle", String);
+bindSetting("setRates", "rates", Number);
+bindSetting("setThrMin", "thrMin", Number, () => { $("vThrMin").textContent = settings.thrMin + " %"; });
+bindSetting("setThrMax", "thrMax", Number, () => { $("vThrMax").textContent = settings.thrMax + " %"; });
+bindSetting("setExpo", "expo", Number, () => { $("vExpo").textContent = pct(settings.expo); });
+bindSetting("setExpoYaw", "expoYaw", Number, () => { $("vExpoYaw").textContent = pct(settings.expoYaw); });
+bindSetting("setDead", "dead", Number, () => { $("vDead").textContent = pct(settings.dead); });
+bindSetting("setRumble", "rumble", Boolean);
+bindSetting("setSound", "sound", Boolean);
+bindSetting("setVoice", "voice", Boolean);
+bindSetting("setBlurPause", "blurPause", Boolean);
+bindSetting("setKeyboard", "keyboard", Boolean);
+bindSetting("linkRP", "linkRP", Boolean);
+bindSetting("liveGains", "liveGains", Boolean);
+bindSetting("autoRec", "autoRec", Boolean);
+bindSetting("mtPower", "mtPower", Number, () => { $("vMtPower").textContent = settings.mtPower + " %"; });
+bindSetting("stepDeg", "stepDeg", Number, () => { $("vStepDeg").textContent = "±" + settings.stepDeg + "°"; });
+bindSetting("stepHoldBox", "stepHold", Boolean);
+$("stepRollBtn").addEventListener("click", () => startStep("roll"));
+$("stepPitchBtn").addEventListener("click", () => startStep("pitch"));
+$("hoverFit").addEventListener("click", fitHover);
+bindSetting("mtTime", "mtTime", Number, () => { $("vMtTime").textContent = num(settings.mtTime / 1000, 1) + " s"; });
+$("plotWin").value = String(settings.plotWin);
+$("bindTable").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-learn]");
+  if (b && !armReq) startLearn(b.dataset.learn);
+});
+$("bindReset").addEventListener("click", () => {
+  delete settings.bindings[input.padId]; saveSettings(); renderBindTable();
+});
+$("rumbleTest").addEventListener("click", () => { const r = settings.rumble; settings.rumble = true; rumble(400, 1, 1); settings.rumble = r; });
+$("soundBtn").addEventListener("click", () => {
+  audioCtx();
+  const on = !(settings.sound || settings.voice);
+  settings.sound = on; settings.voice = on; saveSettings();
+  $("setSound").checked = on; $("setVoice").checked = on;
+  if (on) beep([[880, 80]]);
+  render();
+});
+// tuning
+$("gainApply").addEventListener("click", applyGains);
+$("gainRead").addEventListener("click", () => { for (const k in gainEdits) delete gainEdits[k]; readAllGains(); renderGains(); });
+$("gainSave").addEventListener("click", () => { applyGains(); setTimeout(() => sendParam(P_SAVE, "", 0), 150); });
+$("gainReset").addEventListener("click", () => {
+  if (now() < resetArmedUntil) { resetArmedUntil = 0; sendParam(P_RESET, "", 0); $("gainReset").textContent = t("resetDefaults"); return; }
+  resetArmedUntil = now() + 3000; $("gainReset").textContent = t("reallyReset");
+  setTimeout(() => { $("gainReset").textContent = t("resetDefaults"); }, 3000);
+});
+// motor test
+$("mtAll").addEventListener("click", () => startMotorTest(15));
+$("mtStop").addEventListener("click", () => { sendMotorTest(0, 0, 0); motorTest.running = 0; renderMotors(); });
+$("propsOff").addEventListener("change", renderMotors);
+// recorder and log
+$("recBtn").addEventListener("click", () => { if (rec.cur && !rec.cur.auto) recStop(); else if (!rec.cur) recStart(false); });
+$("recList").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-csv]"), d = e.target.closest("[data-del]");
+  if (c) { const r = rec.list.find((x) => x.n === +c.dataset.csv); if (r) recSave(r); }
+  if (d) { rec.list = rec.list.filter((x) => x.n !== +d.dataset.del); renderRec(); }
+});
+$("logSave").addEventListener("click", () => {
+  download(`groundstation-log-${stamp(new Date())}.txt`, logEntries.map((e) => `${e.d.toISOString()}  ${e.text}`).join("\n") + "\n");
+});
+$("logClear").addEventListener("click", () => { logEntries.length = 0; renderLog(); });
+// connection
+$("addr").value = settings.drone;
+const reconnectTo = () => {
+  const v = $("addr").value.trim();
+  if (!v) return;
+  settings.drone = v; saveSettings(); link.reconnectDelay = 250; link.info = null; link.tel = null;
+  for (const k in gains) delete gains[k];
+  connect();
+};
+$("addrGo").addEventListener("click", reconnectTo);
+$("addr").addEventListener("keydown", (e) => { if (e.key === "Enter") reconnectTo(); });
+$("overlay").addEventListener("click", () => { window.focus(); });
+$("lang").addEventListener("click", () => {
+  lang = lang === "de" ? "en" : "de";
+  local.set("gs_lang", lang);
+  applyLang();
+});
+window.addEventListener("gamepadconnected", () => { pollPads(); renderPadPanel(); });
+window.addEventListener("gamepaddisconnected", () => { pollPads(); renderPadPanel(); });
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelectorAll("[data-t]").forEach((el) => { el.textContent = t(el.dataset.t); });
+  document.querySelectorAll("[data-h]").forEach((el) => { el.innerHTML = t(el.dataset.h); });   // own texts only
+  document.querySelectorAll("[data-ta]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.ta)); el.title = t(el.dataset.ta); });
+  $("lang").textContent = t("otherLang");
+  renderFreeze();
+  $("vMtTime").textContent = num(settings.mtTime / 1000, 1) + " s";
+  renderPadPanel(); renderPanels(); renderLog(); render();
+}
+
+// ===== start ===============================================================================
+buildMotorSvg();
+buildPlots();
+showPanel(settings.panel || "pad");
+applyLang();
+connect();
+setInterval(controlTick, SEND_MS);
+setInterval(render, 100);
+setInterval(() => { renderDrone(); renderMotors(); if (rec.cur) renderRec(); if (settings.panel === "tune") renderGains(); }, 500);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

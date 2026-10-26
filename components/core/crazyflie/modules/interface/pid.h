@@ -64,6 +64,46 @@
 
   #define DEFAULT_PID_INTEGRATION_LIMIT 5000.0
   #define DEFAULT_PID_OUTPUT_LIMIT      0.0
+#elif defined(CONFIG_TARGET_E1_MINI)
+  /* Roll and pitch rate loop from the vendor firmware CF-Drone (songge8,
+   * control.ino), tuned for this frame: P 0.06, I 0.1, D 0.001 in motor duty
+   * per rad/s. Converted with 2 * 65535 / 57.3, because the X mixer below
+   * halves roll and pitch. Yaw and the attitude loop keep the ESP-Drone values:
+   * the vendor's yaw gain (0.3, here about 343) relies on motor desaturation
+   * in its mixer, power_distribution_stock.c only clips each motor. */
+  #define PID_ROLL_RATE_KP  137.0
+  #define PID_ROLL_RATE_KI  229.0
+  #define PID_ROLL_RATE_KD  2.3
+  #define PID_ROLL_RATE_INTEGRATION_LIMIT    33.3
+
+  #define PID_PITCH_RATE_KP  137.0
+  #define PID_PITCH_RATE_KI  229.0
+  #define PID_PITCH_RATE_KD  2.3
+  #define PID_PITCH_RATE_INTEGRATION_LIMIT   33.3
+
+  #define PID_YAW_RATE_KP  120.0
+  #define PID_YAW_RATE_KI  16.7
+  #define PID_YAW_RATE_KD  0.0
+  #define PID_YAW_RATE_INTEGRATION_LIMIT     166.7
+
+  #define PID_ROLL_KP  5.9
+  #define PID_ROLL_KI  2.9
+  #define PID_ROLL_KD  0.0
+  #define PID_ROLL_INTEGRATION_LIMIT    20.0
+
+  #define PID_PITCH_KP  5.9
+  #define PID_PITCH_KI  2.9
+  #define PID_PITCH_KD  0.0
+  #define PID_PITCH_INTEGRATION_LIMIT   20.0
+
+  #define PID_YAW_KP  6.0
+  #define PID_YAW_KI  1.0
+  #define PID_YAW_KD  0.35
+  #define PID_YAW_INTEGRATION_LIMIT     360.0
+
+
+  #define DEFAULT_PID_INTEGRATION_LIMIT 5000.0
+  #define DEFAULT_PID_OUTPUT_LIMIT      0.0
 #else
   #define PID_ROLL_RATE_KP  250.0
   #define PID_ROLL_RATE_KI  500.0

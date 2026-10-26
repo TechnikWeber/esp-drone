@@ -69,6 +69,8 @@ gesehen). Der Crazyflie-Mischer von ESP-Drone erwartet dasselbe, deshalb ist
   bricht die 3,3-V-Versorgung kurz ein, ein Reset in der Luft wäre schlimmer.
 - **Partitionstabelle** für 4 MB mit zwei App-Bereichen (späteres Update über
   WLAN) und Core-Dump-Bereich.
+- **Reglerwerte** für Roll und Nick aus der Werks-Firmware übernommen
+  (umgerechnet, siehe „Erster Flug“).
 - **Browser-Steuerung mit Captive Portal**, siehe [webcontrol.md](webcontrol.md).
 
 ## Werkzeuge einrichten
@@ -188,10 +190,12 @@ Jeder Punkt muss stimmen, bevor Propeller montiert werden.
 - Drohne eben hinstellen, bis „Bereit“ still liegen lassen (Kalibrierung).
 - Scharfschalten, Gas langsam erhöhen. Kippt oder dreht sie beim Abheben weg:
   sofort **NOT-AUS**.
-- Die Reglerwerte sind die ESP-Drone-Standardwerte (Drehrate Roll/Nick: P 250,
-  I 500, D 2,5; Gier P 120; Lage P 5,9). Die Werks-Firmware nutzt für diesen
-  Rahmen, in ESP-Drone-Einheiten umgerechnet, etwa Drehrate P 137, I 229, D 2,3,
-  Gier P 343 und Lage P 6. Schwingt der E1 Mini oder dreht er träge um die
-  Hochachse, die Parameter `pid_rate.*` in diese Richtung ändern (per cfclient
-  über UDP). Umrechnung: Wert × 2 · 65535 / 57,3 für Roll und Nick (der
-  ESP-Drone-Mischer halbiert diese Anteile), × 65535 / 57,3 für Gier.
+- Reglerwerte: Für Roll und Nick nutzt der E1 Mini die Drehraten-Werte der
+  Werks-Firmware, in ESP-Drone-Einheiten umgerechnet: P 137, I 229, D 2,3 statt
+  der Crazyflie-Werte 250/500/2,5. Umrechnung: Wert × 2 · 65535 / 57,3, weil der
+  ESP-Drone-Mischer Roll und Nick halbiert. Gier (P 120) und Lageregler (P 5,9)
+  bleiben ESP-Drone-Standard. Die Werks-Firmware nutzt für Gier umgerechnet
+  etwa P 343, verlässt sich dabei aber auf eine Entsättigung der Motoren, die
+  der ESP-Drone-Mischer nicht hat. Schwingt der E1 Mini oder dreht er träge um
+  die Hochachse, die Parameter `pid_rate.*` und `pid_attitude.*` per cfclient
+  (UDP) vorsichtig anpassen.

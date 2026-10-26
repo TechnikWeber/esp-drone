@@ -17,7 +17,7 @@ idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS "include"
                        PRIV_REQUIRES crazyflie platform wifi config
                                      esp_http_server esp_netif esp_wifi esp_event
-                                     esp_timer esp_app_format lwip)
+                                     esp_timer esp_app_format lwip nvs_flash)
 
 if(CONFIG_WEBCTRL_ENABLE)
     # The control page is compressed at build time and linked into the

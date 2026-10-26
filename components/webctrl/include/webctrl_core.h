@@ -34,15 +34,18 @@
 /* Wire protocol: binary WebSocket frames, little endian                     */
 /* ------------------------------------------------------------------------ */
 
-#define WC_PROTOCOL_VERSION   1
+/* 2: TRIM message; telemetry 40 bytes with state2, stop reason and trim */
+#define WC_PROTOCOL_VERSION   2
 
 #define WC_MSG_CONTROL        0x01  /* client -> drone */
 #define WC_MSG_HELLO          0x02  /* client -> drone, first frame after connect */
+#define WC_MSG_TRIM           0x03  /* client -> drone, when the pilot trims */
 #define WC_MSG_TELEMETRY      0x81  /* drone -> client */
 
 #define WC_CONTROL_LEN        16
 #define WC_HELLO_LEN          8
-#define WC_TELEMETRY_LEN      36
+#define WC_TRIM_LEN           4
+#define WC_TELEMETRY_LEN      40
 
 /* CONTROL flags */
 #define WC_FLAG_ARM           0x01  /* pilot wants the motors armed (level, not edge) */
@@ -69,6 +72,15 @@ typedef struct {
     uint32_t sessionToken;  /* 0 = new session, else the token from telemetry */
 } wcHello_t;
 
+/* Roll / pitch trim, added to the stick angles and used as "level" by the
+ * failsafe. The drone stores it; every page shows it from the telemetry. */
+#define WC_TRIM_MAX           50    /* in 1/10 deg: +-5.0 deg */
+
+typedef struct {
+    int8_t roll;    /* 1/10 deg, + = right */
+    int8_t pitch;   /* 1/10 deg, + = forward */
+} wcTrim_t;
+
 /* TELEMETRY state bits */
 #define WC_STATE_ARMED        0x01  /* motors armed by the web pilot */
 #define WC_STATE_YOU_PILOT    0x02  /* this connection is the pilot */
@@ -78,6 +90,21 @@ typedef struct {
 #define WC_STATE_ARM_BLOCKED  0x20  /* release ARM before arming again */
 #define WC_STATE_READY        0x40  /* self test passed, sensors calibrated */
 #define WC_STATE_TUMBLED      0x80  /* upside down detected */
+
+/* TELEMETRY state2 bits */
+#define WC_STATE2_BAT_LANDING 0x01  /* battery empty in flight: forced landing */
+#define WC_STATE2_BAT_NO_ARM  0x02  /* battery too low to arm (only sent while nobody flies) */
+
+/* Why the last web pilot session ended */
+typedef enum {
+    WC_STOP_NONE = 0,
+    WC_STOP_RELEASED,   /* the pilot disarmed */
+    WC_STOP_KILL,       /* emergency stop from a browser */
+    WC_STOP_LINK,       /* link failsafe ran to the end */
+    WC_STOP_TUMBLED,
+    WC_STOP_BATTERY,    /* battery empty */
+    WC_STOP_ARM_LOST,   /* arm taken away elsewhere (system.forceArm, KILL by CRTP) */
+} wcStopReason_t;
 
 typedef enum {
     WC_ARM_OK = 0,
@@ -103,18 +130,23 @@ typedef struct {
     uint16_t thrustOut;     /* thrust sent to the controller, 0..1000 */
     uint16_t staleDrops;    /* frames dropped because they arrived too late (wraps) */
     uint16_t delayMs;       /* extra delay of the last frame vs. the best seen */
+    uint8_t  state2;        /* WC_STATE2_* */
+    uint8_t  stopReason;    /* wcStopReason_t of the last session end */
     uint32_t uptimeMs;
     uint32_t sessionToken;  /* token of this connection's pilot session, 0 if none */
+    wcTrim_t trim;          /* current trim of the drone */
 } wcTelemetry_t;
 
 /* Decoders validate type, length and value ranges; they return false for
  * anything malformed (the frame is then ignored). */
 bool wcDecodeControl(const uint8_t *buf, size_t len, wcControl_t *out);
 bool wcDecodeHello(const uint8_t *buf, size_t len, wcHello_t *out);
+bool wcDecodeTrim(const uint8_t *buf, size_t len, wcTrim_t *out);
 size_t wcEncodeTelemetry(const wcTelemetry_t *t, uint8_t *buf, size_t cap);
 
 /* Encoders used by tests and tools */
 size_t wcEncodeControl(const wcControl_t *c, uint8_t *buf, size_t cap);
+size_t wcEncodeTrim(const wcTrim_t *t, uint8_t *buf, size_t cap);
 bool wcDecodeTelemetry(const uint8_t *buf, size_t len, wcTelemetry_t *out);
 
 /* true if sequence number a is newer than b (wrap safe) */
@@ -144,6 +176,10 @@ typedef struct {
     float    descendFactor; /* descent thrust = hover thrust * factor */
     float    maxAngleDeg;   /* full stick roll / pitch */
     float    maxYawRateDeg; /* full stick yaw rate */
+    uint16_t batLandMv;     /* forced landing below this voltage in flight, 0 = off */
+    uint16_t batArmMinMv;   /* no arming below this voltage, 0 = off */
+    uint32_t batLandDelayMs; /* the voltage has to stay low this long */
+    uint32_t batLandTimeMs; /* forced landing: thrust ramps down to zero in this time */
 } wcConfig_t;
 
 /* Pilot command in physical units */
@@ -156,8 +192,10 @@ typedef struct {
 
 wcStage_t wcStageForAge(const wcConfig_t *cfg, uint32_t ageMs);
 
-/* Stick values (protocol units) to physical units */
-void wcControlToSetpoint(const wcConfig_t *cfg, const wcControl_t *c, wcSetpoint_t *out);
+/* Stick values (protocol units) plus trim to physical units. Roll and pitch
+ * stay within +-maxAngleDeg. trim may be NULL. */
+void wcControlToSetpoint(const wcConfig_t *cfg, const wcControl_t *c, const wcTrim_t *trim,
+                         wcSetpoint_t *out);
 
 /* ------------------------------------------------------------------------ */
 /* Hover thrust estimate: low pass of the thrust while flying                */
@@ -177,9 +215,53 @@ void wcHoverReset(wcHover_t *h);
 void wcHoverUpdate(wcHover_t *h, float thrust, float dtS);
 bool wcHoverValid(const wcHover_t *h);
 
-/* Setpoint for a stage, based on the pilot's last fresh command */
+/* Setpoint for a stage, based on the pilot's last fresh command. "Level" means
+ * the trim angles (trim may be NULL). */
 void wcFailsafeOutput(const wcConfig_t *cfg, wcStage_t stage, const wcSetpoint_t *last,
-                      const wcHover_t *hover, wcSetpoint_t *out);
+                      const wcHover_t *hover, const wcTrim_t *trim, wcSetpoint_t *out);
+
+/* ------------------------------------------------------------------------ */
+/* Battery protection                                                        */
+/* ------------------------------------------------------------------------ */
+/*
+ * Forced landing: in flight, a battery voltage below batLandMv for
+ * batLandDelayMs starts it. The pilot keeps steering, but the thrust is capped:
+ * the cap starts at the hover thrust and ramps down to zero within
+ * batLandTimeMs, then the drone disarms. Armed on the ground with an empty
+ * battery, the drone disarms at once. Readings below WC_BAT_ABSENT_V mean "no
+ * battery" (USB power on the bench): no checks.
+ */
+#define WC_BAT_FILTER_TAU_S   0.5f  /* low pass of the voltage readings */
+#define WC_BAT_ABSENT_V       0.5f
+
+typedef enum {
+    WC_BAT_NONE = 0,
+    WC_BAT_LAND,        /* start the forced landing now */
+    WC_BAT_EMPTY,       /* armed but not flying with an empty battery: disarm */
+} wcBatEvent_t;
+
+typedef struct {
+    float    volts;         /* filtered voltage, 0 = no reading */
+    bool     lowTiming;     /* below batLandMv since lowSinceMs */
+    uint32_t lowSinceMs;
+    bool     landing;       /* forced landing active */
+    uint32_t landStartMs;
+    float    landFrom;      /* thrust cap at the start of the landing */
+} wcBattery_t;
+
+void wcBatteryReset(wcBattery_t *b);
+/* A new pilot session: no landing, no timer. The filtered voltage stays. */
+void wcBatteryNewSession(wcBattery_t *b);
+/*
+ * Call every cycle. volts: latest reading. session: a web pilot holds the arm.
+ * flying: the thrust is above WC_HOVER_FLYING_THRUST. landFrom: thrust the
+ * landing ramp starts from (hover estimate, or the current thrust if lower).
+ */
+wcBatEvent_t wcBatteryUpdate(wcBattery_t *b, const wcConfig_t *cfg, uint32_t nowMs, float dtS,
+                             float volts, bool session, bool flying, float landFrom);
+/* Upper limit for the thrust: 1 normally, the landing ramp while landing */
+float wcBatteryThrustCap(const wcBattery_t *b, const wcConfig_t *cfg, uint32_t nowMs);
+bool wcBatteryArmBlocked(const wcBattery_t *b, const wcConfig_t *cfg);
 
 /* ------------------------------------------------------------------------ */
 /* One-way delay estimation without synchronized clocks                      */

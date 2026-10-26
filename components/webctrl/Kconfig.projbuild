@@ -82,6 +82,46 @@ menu "ESPDrone web control (captive portal)"
 
         endmenu
 
+        menu "Battery protection"
+
+            config WEBCTRL_BAT_LAND_MV
+                int "Forced landing below (mV, 0 = off)"
+                range 0 4000
+                default 3000
+                help
+                    In flight, when the battery voltage stays below this value
+                    for WEBCTRL_BAT_LAND_DELAY_MS, the drone lands by itself. The
+                    pilot keeps steering, but the thrust is limited: the limit
+                    starts at the hover thrust and ramps down to zero within
+                    WEBCTRL_BAT_LAND_TIME_MS. Pulling the throttle down after
+                    touchdown ends it at once. Armed on the ground with an empty
+                    battery, the drone disarms. The voltage sags under load, so
+                    this limit is lower than the arming limit.
+
+            config WEBCTRL_BAT_LAND_DELAY_MS
+                int "The voltage has to stay low for (ms)"
+                range 100 10000
+                default 1000
+                help
+                    Short dips, e.g. while climbing, do not start the landing.
+
+            config WEBCTRL_BAT_LAND_TIME_MS
+                int "Forced landing: thrust down to zero within (ms)"
+                range 2000 30000
+                default 10000
+
+            config WEBCTRL_BAT_ARM_MIN_MV
+                int "No arming below (mV, 0 = off)"
+                range 0 4200
+                default 3400
+                help
+                    A 1S LiPo below about 3.4 V at rest is nearly empty and would
+                    hit the landing limit right after takeoff. Compare the
+                    voltage on the page with a multimeter first (bench checklist
+                    in docs/e1-mini.md).
+
+        endmenu
+
         config WEBCTRL_TELEMETRY_HZ
             int "Telemetry rate (Hz)"
             range 5 50

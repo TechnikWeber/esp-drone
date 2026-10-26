@@ -8,11 +8,13 @@ Dies ist eine **geänderte Fassung** von [espressif/esp-drone](https://github.co
 ([TechnikWeber](https://github.com/TechnikWeber)):
 
 - **Steuern im Browser:** Das Handy verbindet sich mit dem WLAN der Drohne, ein
-  Captive Portal öffnet die Steuerseite (WebSocket, Failsafe bei Verbindungsverlust).
-  Keine App nötig. Siehe [docs/webcontrol.md](docs/webcontrol.md).
+  Captive Portal öffnet die Steuerseite (WebSocket, Failsafe bei Verbindungsverlust,
+  Notlandung bei leerem Akku, Trimmung). Keine App nötig. Siehe
+  [docs/webcontrol.md](docs/webcontrol.md).
 - **Neues Board: CHERGLOW E1 Mini**, ein Bausatz mit aufgestecktem ESP32-DevKit
   und MPU6500 per SPI, der unter anderem als „ESP32 Drone Kit“ verkauft wird.
-  Siehe [docs/e1-mini.md](docs/e1-mini.md).
+  Pins und Reglerwerte mit der Werks-Firmware (CF-Drone) abgeglichen. Siehe
+  [docs/e1-mini.md](docs/e1-mini.md).
 - **Freischalten (Arming)** durch genau eine Quelle: Web-Pilot, App/cfclient/ESP-NOW
   (Gas einmal auf null) oder `system.forceArm`. NOT-AUS von jedem verbundenen Handy.
 - Partitionstabelle mit zwei App-Bereichen und Core-Dump-Bereich.

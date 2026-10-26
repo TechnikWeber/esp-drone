@@ -36,6 +36,10 @@ static const wcConfig_t cfg = {
     .descendFactor = 0.85f,
     .maxAngleDeg = 15.0f,
     .maxYawRateDeg = 120.0f,
+    .batLandMv = 3000,
+    .batArmMinMv = 3400,
+    .batLandDelayMs = 1000,
+    .batLandTimeMs = 10000,
 };
 
 static wcControl_t ctrl(uint16_t seq, uint32_t clientMs, uint16_t thrust)
@@ -93,17 +97,19 @@ static void testControlRoundTrip(void)
 static void testHelloAndTelemetry(void)
 {
     puts("hello / telemetry");
-    const uint8_t hello[WC_HELLO_LEN] = {WC_MSG_HELLO, 1, 0, 0, 0x78, 0x56, 0x34, 0x12};
+    const uint8_t hello[WC_HELLO_LEN] = {WC_MSG_HELLO, 2, 0, 0, 0x78, 0x56, 0x34, 0x12};
     wcHello_t h;
     CHECK(wcDecodeHello(hello, sizeof(hello), &h));
-    CHECK(h.version == 1 && h.sessionToken == 0x12345678u);
+    CHECK(h.version == 2 && h.sessionToken == 0x12345678u);
     CHECK(!wcDecodeHello(hello, sizeof(hello) - 1, &h));
 
     wcTelemetry_t t = {.state = WC_STATE_ARMED | WC_STATE_YOU_PILOT, .stage = WC_STAGE_LEVEL,
                        .armResult = WC_ARM_OK, .echoSeq = 4711, .rxRate = 50,
                        .echoClientMs = 123456789, .vbatMv = 3912, .rollCdeg = -1234,
                        .pitchCdeg = 567, .yawCdeg = -17999, .thrustOut = 512,
-                       .staleDrops = 3, .delayMs = 42, .uptimeMs = 987654, .sessionToken = 0xCAFEF00D};
+                       .staleDrops = 3, .delayMs = 42, .state2 = WC_STATE2_BAT_LANDING | WC_STATE2_BAT_NO_ARM,
+                       .stopReason = WC_STOP_BATTERY, .uptimeMs = 987654, .sessionToken = 0xCAFEF00D,
+                       .trim = {.roll = -50, .pitch = 49}};
     uint8_t buf[64];
     wcTelemetry_t back;
     CHECK(wcEncodeTelemetry(&t, buf, sizeof(buf)) == WC_TELEMETRY_LEN);
@@ -114,7 +120,9 @@ static void testHelloAndTelemetry(void)
     CHECK(back.vbatMv == t.vbatMv && back.rollCdeg == t.rollCdeg && back.pitchCdeg == t.pitchCdeg);
     CHECK(back.yawCdeg == t.yawCdeg && back.thrustOut == t.thrustOut && back.staleDrops == t.staleDrops);
     CHECK(back.delayMs == t.delayMs && back.uptimeMs == t.uptimeMs && back.sessionToken == t.sessionToken);
-    CHECK(buf[26] == 0 && buf[27] == 0);   // reserved bytes are zero
+    CHECK(back.state2 == t.state2 && back.stopReason == t.stopReason);
+    CHECK(back.trim.roll == -50 && back.trim.pitch == 49);
+    CHECK(buf[38] == 0 && buf[39] == 0);   // reserved bytes are zero
 }
 
 static void testSeq(void)
@@ -158,34 +166,34 @@ static void testFailsafeOutput(void)
     const wcSetpoint_t sinking = {.roll = 0, .pitch = 0, .yawRate = 0, .thrust = 0.4f};
     wcSetpoint_t out;
 
-    wcFailsafeOutput(&cfg, WC_STAGE_HOLD, &climbing, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_HOLD, &climbing, &hover, NULL, &out);
     CHECK(memcmp(&out, &climbing, sizeof(out)) == 0);
 
     // level: attitude zero, climbing pilot is limited to hover thrust
-    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &climbing, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &climbing, &hover, NULL, &out);
     CHECK(out.roll == 0 && out.pitch == 0 && out.yawRate == 0);
     CHECK_NEAR(out.thrust, 0.55f, 0.001f);
     // ... a sinking pilot keeps sinking
-    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &sinking, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &sinking, &hover, NULL, &out);
     CHECK_NEAR(out.thrust, 0.4f, 0.001f);
 
     // descend: below hover
-    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &climbing, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &climbing, &hover, NULL, &out);
     CHECK_NEAR(out.thrust, 0.55f * 0.85f, 0.001f);
     CHECK(out.thrust < hover.value);
-    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &sinking, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &sinking, &hover, NULL, &out);
     CHECK_NEAR(out.thrust, 0.4f, 0.001f);
 
     // off
-    wcFailsafeOutput(&cfg, WC_STAGE_OFF, &climbing, &hover, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_OFF, &climbing, &hover, NULL, &out);
     CHECK(out.thrust == 0 && out.roll == 0 && out.yawRate == 0);
 
     // without a valid hover estimate the last thrust is the reference
     wcHover_t fresh;
     wcHoverReset(&fresh);
-    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &climbing, &fresh, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &climbing, &fresh, NULL, &out);
     CHECK_NEAR(out.thrust, 0.8f, 0.001f);
-    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &climbing, &fresh, &out);
+    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &climbing, &fresh, NULL, &out);
     CHECK_NEAR(out.thrust, 0.8f * 0.85f, 0.001f);
 }
 
@@ -412,11 +420,175 @@ static void testControlToSetpoint(void)
     puts("stick to setpoint");
     wcControl_t c = {.roll = 1000, .pitch = -500, .yaw = 250, .thrust = 1000};
     wcSetpoint_t sp;
-    wcControlToSetpoint(&cfg, &c, &sp);
+    wcControlToSetpoint(&cfg, &c, NULL, &sp);
     CHECK_NEAR(sp.roll, 15.0f, 0.001f);
     CHECK_NEAR(sp.pitch, -7.5f, 0.001f);
     CHECK_NEAR(sp.yawRate, 30.0f, 0.001f);
     CHECK_NEAR(sp.thrust, 1.0f, 0.001f);
+}
+
+static void testTrim(void)
+{
+    puts("trim");
+    const wcTrim_t in = {.roll = -50, .pitch = 7};
+    uint8_t buf[WC_TRIM_LEN];
+    wcTrim_t out;
+    CHECK(wcEncodeTrim(&in, buf, sizeof(buf)) == WC_TRIM_LEN);
+    CHECK(wcEncodeTrim(&in, buf, WC_TRIM_LEN - 1) == 0);
+    CHECK(buf[0] == WC_MSG_TRIM && buf[3] == 0);
+    CHECK(wcDecodeTrim(buf, sizeof(buf), &out));
+    CHECK(out.roll == -50 && out.pitch == 7);
+
+    // wrong length or type, values beyond +-5 deg
+    CHECK(!wcDecodeTrim(buf, WC_TRIM_LEN - 1, &out));
+    uint8_t bad[WC_TRIM_LEN] = {WC_MSG_TRIM, (uint8_t)(int8_t)(WC_TRIM_MAX + 1), 0, 0};
+    CHECK(!wcDecodeTrim(bad, sizeof(bad), &out));
+    bad[1] = (uint8_t)(int8_t)(-WC_TRIM_MAX - 1);
+    CHECK(!wcDecodeTrim(bad, sizeof(bad), &out));
+    bad[1] = 0;
+    bad[2] = (uint8_t)(int8_t)-128;
+    CHECK(!wcDecodeTrim(bad, sizeof(bad), &out));
+    bad[2] = 0;
+    bad[0] = WC_MSG_HELLO;
+    CHECK(!wcDecodeTrim(bad, sizeof(bad), &out));
+    CHECK(!wcDecodeTrim(NULL, WC_TRIM_LEN, &out));
+
+    // the trim adds to the stick angle; the sum stays within the max angle
+    const wcTrim_t t = {.roll = 20, .pitch = -15};   // 2.0 deg right, 1.5 deg backward
+    wcControl_t c = {.roll = 0, .pitch = 0, .yaw = 500, .thrust = 500};
+    wcSetpoint_t sp;
+    wcControlToSetpoint(&cfg, &c, &t, &sp);
+    CHECK_NEAR(sp.roll, 2.0f, 0.001f);
+    CHECK_NEAR(sp.pitch, -1.5f, 0.001f);
+    CHECK_NEAR(sp.yawRate, 60.0f, 0.001f);   // yaw and thrust are not trimmed
+    CHECK_NEAR(sp.thrust, 0.5f, 0.001f);
+    c.roll = 1000;
+    c.pitch = -1000;
+    wcControlToSetpoint(&cfg, &c, &t, &sp);
+    CHECK_NEAR(sp.roll, 15.0f, 0.001f);      // 17 limited to the max angle
+    CHECK_NEAR(sp.pitch, -15.0f, 0.001f);    // -16.5 limited
+    c.roll = -1000;
+    c.pitch = 1000;
+    wcControlToSetpoint(&cfg, &c, &t, &sp);
+    CHECK_NEAR(sp.roll, -13.0f, 0.001f);
+    CHECK_NEAR(sp.pitch, 13.5f, 0.001f);
+
+    // the failsafe levels out to the trim; OFF is plain zero
+    wcHover_t hover;
+    wcHoverReset(&hover);
+    const wcSetpoint_t last = {.roll = 10, .pitch = 5, .yawRate = 30, .thrust = 0.5f};
+    wcSetpoint_t fs;
+    wcFailsafeOutput(&cfg, WC_STAGE_LEVEL, &last, &hover, &t, &fs);
+    CHECK_NEAR(fs.roll, 2.0f, 0.001f);
+    CHECK_NEAR(fs.pitch, -1.5f, 0.001f);
+    CHECK(fs.yawRate == 0);
+    wcFailsafeOutput(&cfg, WC_STAGE_DESCEND, &last, &hover, &t, &fs);
+    CHECK_NEAR(fs.roll, 2.0f, 0.001f);
+    CHECK_NEAR(fs.pitch, -1.5f, 0.001f);
+    wcFailsafeOutput(&cfg, WC_STAGE_OFF, &last, &hover, &t, &fs);
+    CHECK(fs.roll == 0 && fs.pitch == 0 && fs.thrust == 0);
+}
+
+/* Feed a constant voltage for ms milliseconds in 10 ms steps. Returns the first
+ * event (and its time in *eventAt), WC_BAT_NONE if there was none. */
+static wcBatEvent_t runBattery(wcBattery_t *b, const wcConfig_t *c, uint32_t *t, uint32_t ms,
+                               float volts, bool session, bool flying, uint32_t *eventAt)
+{
+    wcBatEvent_t first = WC_BAT_NONE;
+    for (uint32_t i = 0; i < ms; i += 10) {
+        *t += 10;
+        const wcBatEvent_t e = wcBatteryUpdate(b, c, *t, 0.01f, volts, session, flying, 0.5f);
+        if (first == WC_BAT_NONE && e != WC_BAT_NONE) {
+            first = e;
+            if (eventAt != NULL) {
+                *eventAt = *t;
+            }
+        }
+    }
+    return first;
+}
+
+static void testBattery(void)
+{
+    puts("battery protection");
+    wcBattery_t b;
+    wcConfig_t off = cfg;
+    off.batLandMv = 0;
+    off.batArmMinMv = 0;
+    uint32_t t = 0, at = 0;
+
+    // filter: starts at the first reading, then a 0.5 s time constant
+    wcBatteryReset(&b);
+    CHECK(wcBatteryUpdate(&b, &cfg, 0, 0.01f, 3.90f, false, false, 0) == WC_BAT_NONE);
+    CHECK_NEAR(b.volts, 3.90f, 0.001f);
+    runBattery(&b, &cfg, &t, 500, 3.70f, false, false, NULL);
+    CHECK(b.volts > 3.75f && b.volts < 3.80f);   // ~63 % of the step
+
+    // no battery (USB power on the bench): no reading, no checks
+    wcBatteryUpdate(&b, &cfg, t, 0.01f, 0.1f, false, false, 0);
+    CHECK(b.volts == 0);
+    CHECK(!wcBatteryArmBlocked(&b, &cfg));
+    CHECK(runBattery(&b, &cfg, &t, 5000, 0.0f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(!b.landing);
+
+    // arming needs batArmMinMv
+    wcBatteryReset(&b);
+    wcBatteryUpdate(&b, &cfg, t, 0.01f, 3.35f, false, false, 0);
+    CHECK(wcBatteryArmBlocked(&b, &cfg));
+    CHECK(!wcBatteryArmBlocked(&b, &off));
+    wcBatteryReset(&b);
+    wcBatteryUpdate(&b, &cfg, t, 0.01f, 3.45f, false, false, 0);
+    CHECK(!wcBatteryArmBlocked(&b, &cfg));
+
+    // in flight a short dip (0.6 s, e.g. a climb) does not start the landing
+    wcBatteryReset(&b);
+    t = 1000;
+    CHECK(runBattery(&b, &cfg, &t, 2000, 3.30f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(runBattery(&b, &cfg, &t, 600, 2.80f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(runBattery(&b, &cfg, &t, 1000, 3.30f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(!b.landing);
+
+    // a lasting drop does: filter (~0.7 s to cross 3.0 V) plus 1 s delay
+    const uint32_t start = t;
+    CHECK(runBattery(&b, &cfg, &t, 3000, 2.90f, true, true, &at) == WC_BAT_LAND);
+    CHECK(at - start >= 1600 && at - start <= 1800);
+    CHECK(b.landing);
+    CHECK_NEAR(b.landFrom, 0.5f, 0.001f);
+
+    // the thrust cap ramps from landFrom to zero within batLandTimeMs
+    CHECK_NEAR(wcBatteryThrustCap(&b, &cfg, at), 0.5f, 0.001f);
+    CHECK_NEAR(wcBatteryThrustCap(&b, &cfg, at + 5000), 0.25f, 0.001f);
+    const float nearEnd = wcBatteryThrustCap(&b, &cfg, at + 9990);
+    CHECK(nearEnd > 0.0f && nearEnd < 0.001f);
+    CHECK(wcBatteryThrustCap(&b, &cfg, at + 10000) == 0.0f);
+    CHECK(wcBatteryThrustCap(&b, &cfg, at + 60000) == 0.0f);
+
+    // latched: a recovering voltage does not end it, only the session end does
+    CHECK(runBattery(&b, &cfg, &t, 2000, 3.70f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(b.landing);
+    wcBatteryUpdate(&b, &cfg, t, 0.01f, 3.70f, false, false, 0);
+    CHECK(!b.landing);
+    CHECK(wcBatteryThrustCap(&b, &cfg, t) == 1.0f);
+
+    // armed on the ground with an empty battery: disarm, no landing
+    wcBatteryReset(&b);
+    t = 0;
+    CHECK(runBattery(&b, &cfg, &t, 3000, 2.90f, true, false, NULL) == WC_BAT_EMPTY);
+    CHECK(!b.landing);
+
+    // switched off in menuconfig
+    wcBatteryReset(&b);
+    t = 0;
+    CHECK(runBattery(&b, &off, &t, 5000, 2.50f, true, true, NULL) == WC_BAT_NONE);
+    CHECK(!b.landing && wcBatteryThrustCap(&b, &off, t) == 1.0f);
+
+    // a new session starts without landing; the filtered voltage stays
+    wcBatteryReset(&b);
+    t = 0;
+    CHECK(runBattery(&b, &cfg, &t, 3000, 2.90f, true, true, NULL) == WC_BAT_LAND);
+    const float v = b.volts;
+    wcBatteryNewSession(&b);
+    CHECK(!b.landing && b.volts == v);
 }
 
 int main(void)
@@ -433,6 +605,8 @@ int main(void)
     testLinkResume();
     testArmCheck();
     testControlToSetpoint();
+    testTrim();
+    testBattery();
 
     printf("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

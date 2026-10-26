@@ -71,7 +71,8 @@ gesehen). Der Crazyflie-Mischer von ESP-Drone erwartet dasselbe, deshalb ist
   WLAN) und Core-Dump-Bereich.
 - **Reglerwerte** für Roll und Nick aus der Werks-Firmware übernommen
   (umgerechnet, siehe „Erster Flug“).
-- **Browser-Steuerung mit Captive Portal**, siehe [webcontrol.md](webcontrol.md).
+- **Browser-Steuerung mit Captive Portal**, Akku-Schutz und Trimmung, siehe
+  [webcontrol.md](webcontrol.md).
 
 ## Werkzeuge einrichten
 
@@ -182,6 +183,8 @@ Jeder Punkt muss stimmen, bevor Propeller montiert werden.
 7. **Akku:** Spannung auf der Seite mit einem Multimeter am Akku vergleichen.
    Bei Abweichung `BATTERY_DIVIDER_X1000` anpassen. Hinweis: Über ca. 4,05 V
    kann der ESP32-ADC wegen des Spannungsteilers nicht mehr genau messen.
+   Unter 3,4 V lässt sich die Drohne nicht scharfschalten, im Flug landet sie
+   unter 3,0 V von selbst (siehe [webcontrol.md](webcontrol.md#akku-schutz)).
 
 ## Erster Flug
 
@@ -199,3 +202,5 @@ Jeder Punkt muss stimmen, bevor Propeller montiert werden.
   der ESP-Drone-Mischer nicht hat. Schwingt der E1 Mini oder dreht er träge um
   die Hochachse, die Parameter `pid_rate.*` und `pid_attitude.*` per cfclient
   (UDP) vorsichtig anpassen.
+- Driftet er beim Schweben gleichmäßig zur Seite, mit „Trimm“ auf der
+  Steuerseite ausgleichen (siehe [webcontrol.md](webcontrol.md#trimmen)).

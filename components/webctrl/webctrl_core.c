@@ -110,13 +110,45 @@ bool wcDecodeHello(const uint8_t *buf, size_t len, wcHello_t *out)
     return true;
 }
 
+static bool trimInRange(int8_t v)
+{
+    return v >= -WC_TRIM_MAX && v <= WC_TRIM_MAX;
+}
+
+/* TRIM layout: 0 type, 1 roll (i8), 2 pitch (i8), 3 reserved */
+bool wcDecodeTrim(const uint8_t *buf, size_t len, wcTrim_t *out)
+{
+    if (buf == NULL || out == NULL || len != WC_TRIM_LEN || buf[0] != WC_MSG_TRIM) {
+        return false;
+    }
+    const wcTrim_t t = {.roll = (int8_t)buf[1], .pitch = (int8_t)buf[2]};
+    if (!trimInRange(t.roll) || !trimInRange(t.pitch)) {
+        return false;
+    }
+    *out = t;
+    return true;
+}
+
+size_t wcEncodeTrim(const wcTrim_t *t, uint8_t *buf, size_t cap)
+{
+    if (t == NULL || buf == NULL || cap < WC_TRIM_LEN) {
+        return 0;
+    }
+    buf[0] = WC_MSG_TRIM;
+    buf[1] = (uint8_t)t->roll;
+    buf[2] = (uint8_t)t->pitch;
+    buf[3] = 0;
+    return WC_TRIM_LEN;
+}
+
 /*
  * TELEMETRY layout:
  *  0 type      1 state     2 stage      3 armResult
  *  4 echoSeq   6 rxRate    8 echoClientMs (4)
  * 12 vbatMv   14 rollCdeg 16 pitchCdeg 18 yawCdeg
- * 20 thrustOut 22 staleDrops 24 delayMs 26 reserved
+ * 20 thrustOut 22 staleDrops 24 delayMs 26 state2 27 stopReason
  * 28 uptimeMs (4)         32 sessionToken (4)
+ * 36 trim roll (i8)       37 trim pitch (i8)       38 reserved (2)
  */
 size_t wcEncodeTelemetry(const wcTelemetry_t *t, uint8_t *buf, size_t cap)
 {
@@ -138,8 +170,12 @@ size_t wcEncodeTelemetry(const wcTelemetry_t *t, uint8_t *buf, size_t cap)
     wr16(&buf[20], t->thrustOut);
     wr16(&buf[22], t->staleDrops);
     wr16(&buf[24], t->delayMs);
+    buf[26] = t->state2;
+    buf[27] = t->stopReason;
     wr32(&buf[28], t->uptimeMs);
     wr32(&buf[32], t->sessionToken);
+    buf[36] = (uint8_t)t->trim.roll;
+    buf[37] = (uint8_t)t->trim.pitch;
     return WC_TELEMETRY_LEN;
 }
 
@@ -161,8 +197,12 @@ bool wcDecodeTelemetry(const uint8_t *buf, size_t len, wcTelemetry_t *out)
     out->thrustOut = rd16(&buf[20]);
     out->staleDrops = rd16(&buf[22]);
     out->delayMs = rd16(&buf[24]);
+    out->state2 = buf[26];
+    out->stopReason = buf[27];
     out->uptimeMs = rd32(&buf[28]);
     out->sessionToken = rd32(&buf[32]);
+    out->trim.roll = (int8_t)buf[36];
+    out->trim.pitch = (int8_t)buf[37];
     return true;
 }
 
@@ -187,21 +227,38 @@ wcStage_t wcStageForAge(const wcConfig_t *cfg, uint32_t ageMs)
     return WC_STAGE_OFF;
 }
 
-void wcControlToSetpoint(const wcConfig_t *cfg, const wcControl_t *c, wcSetpoint_t *out)
-{
-    out->roll = cfg->maxAngleDeg * (float)c->roll / WC_AXIS_MAX;
-    out->pitch = cfg->maxAngleDeg * (float)c->pitch / WC_AXIS_MAX;
-    out->yawRate = cfg->maxYawRateDeg * (float)c->yaw / WC_AXIS_MAX;
-    out->thrust = (float)c->thrust / WC_THRUST_MAX;
-}
-
 static float minf(float a, float b)
 {
     return a < b ? a : b;
 }
 
+static float clampf(float v, float lo, float hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static float trimRollDeg(const wcTrim_t *trim)
+{
+    return trim ? trim->roll / 10.0f : 0.0f;
+}
+
+static float trimPitchDeg(const wcTrim_t *trim)
+{
+    return trim ? trim->pitch / 10.0f : 0.0f;
+}
+
+void wcControlToSetpoint(const wcConfig_t *cfg, const wcControl_t *c, const wcTrim_t *trim,
+                         wcSetpoint_t *out)
+{
+    const float maxAngle = cfg->maxAngleDeg;
+    out->roll = clampf(maxAngle * (float)c->roll / WC_AXIS_MAX + trimRollDeg(trim), -maxAngle, maxAngle);
+    out->pitch = clampf(maxAngle * (float)c->pitch / WC_AXIS_MAX + trimPitchDeg(trim), -maxAngle, maxAngle);
+    out->yawRate = cfg->maxYawRateDeg * (float)c->yaw / WC_AXIS_MAX;
+    out->thrust = (float)c->thrust / WC_THRUST_MAX;
+}
+
 void wcFailsafeOutput(const wcConfig_t *cfg, wcStage_t stage, const wcSetpoint_t *last,
-                      const wcHover_t *hover, wcSetpoint_t *out)
+                      const wcHover_t *hover, const wcTrim_t *trim, wcSetpoint_t *out)
 {
     const bool hoverValid = wcHoverValid(hover);
 
@@ -212,10 +269,10 @@ void wcFailsafeOutput(const wcConfig_t *cfg, wcStage_t stage, const wcSetpoint_t
         break;
 
     case WC_STAGE_LEVEL:
-        // Attitude level, yaw stopped. Keep the thrust, but never more than
-        // hover: a pilot who was climbing should not keep climbing.
-        out->roll = 0;
-        out->pitch = 0;
+        // Attitude level (as trimmed), yaw stopped. Keep the thrust, but never
+        // more than hover: a pilot who was climbing should not keep climbing.
+        out->roll = trimRollDeg(trim);
+        out->pitch = trimPitchDeg(trim);
         out->yawRate = 0;
         out->thrust = hoverValid ? minf(last->thrust, hover->value) : last->thrust;
         break;
@@ -224,8 +281,8 @@ void wcFailsafeOutput(const wcConfig_t *cfg, wcStage_t stage, const wcSetpoint_t
         // Below hover thrust: the drone sinks. Without an altitude sensor this
         // is open loop, like the "Land" failsafe of Betaflight.
         const float base = hoverValid ? hover->value : last->thrust;
-        out->roll = 0;
-        out->pitch = 0;
+        out->roll = trimRollDeg(trim);
+        out->pitch = trimPitchDeg(trim);
         out->yawRate = 0;
         out->thrust = minf(last->thrust, base * cfg->descendFactor);
         break;
@@ -269,6 +326,86 @@ void wcHoverUpdate(wcHover_t *h, float thrust, float dtS)
 bool wcHoverValid(const wcHover_t *h)
 {
     return h->flyingS >= WC_HOVER_MIN_FLYING_S;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Battery protection                                                        */
+/* ------------------------------------------------------------------------ */
+
+void wcBatteryReset(wcBattery_t *b)
+{
+    memset(b, 0, sizeof(*b));
+}
+
+void wcBatteryNewSession(wcBattery_t *b)
+{
+    b->lowTiming = false;
+    b->landing = false;
+}
+
+static bool batteryPresent(const wcBattery_t *b)
+{
+    return b->volts >= WC_BAT_ABSENT_V;
+}
+
+wcBatEvent_t wcBatteryUpdate(wcBattery_t *b, const wcConfig_t *cfg, uint32_t nowMs, float dtS,
+                             float volts, bool session, bool flying, float landFrom)
+{
+    // Low pass: motor current makes the voltage jump with the throttle.
+    if (volts < WC_BAT_ABSENT_V) {
+        b->volts = 0;
+    } else if (!batteryPresent(b)) {
+        b->volts = volts;   // first reading
+    } else if (dtS > 0) {
+        b->volts += dtS / (WC_BAT_FILTER_TAU_S + dtS) * (volts - b->volts);
+    }
+
+    if (!session) {
+        wcBatteryNewSession(b);
+        return WC_BAT_NONE;
+    }
+    if (b->landing) {
+        return WC_BAT_NONE;   // stays on until the session ends
+    }
+
+    const bool low = cfg->batLandMv > 0 && batteryPresent(b) && b->volts * 1000.0f < cfg->batLandMv;
+    if (!low) {
+        b->lowTiming = false;
+        return WC_BAT_NONE;
+    }
+    if (!b->lowTiming) {
+        b->lowTiming = true;
+        b->lowSinceMs = nowMs;
+    }
+    if ((uint32_t)(nowMs - b->lowSinceMs) < cfg->batLandDelayMs) {
+        return WC_BAT_NONE;
+    }
+
+    b->lowTiming = false;
+    if (!flying) {
+        return WC_BAT_EMPTY;
+    }
+    b->landing = true;
+    b->landStartMs = nowMs;
+    b->landFrom = landFrom;
+    return WC_BAT_LAND;
+}
+
+float wcBatteryThrustCap(const wcBattery_t *b, const wcConfig_t *cfg, uint32_t nowMs)
+{
+    if (!b->landing) {
+        return 1.0f;
+    }
+    const uint32_t t = nowMs - b->landStartMs;
+    if (t >= cfg->batLandTimeMs) {
+        return 0.0f;
+    }
+    return b->landFrom * (1.0f - (float)t / (float)cfg->batLandTimeMs);
+}
+
+bool wcBatteryArmBlocked(const wcBattery_t *b, const wcConfig_t *cfg)
+{
+    return cfg->batArmMinMv > 0 && batteryPresent(b) && b->volts * 1000.0f < cfg->batArmMinMv;
 }
 
 /* ------------------------------------------------------------------------ */

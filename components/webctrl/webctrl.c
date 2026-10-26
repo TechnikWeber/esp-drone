@@ -21,12 +21,14 @@
  *    redirected to the control page, so phones open it by themselves.
  *  - Port 81: WebSocket control channel, in its own server task so a slow page
  *    download or captive portal probes cannot delay the pilot's commands.
- *  - A 100 Hz task turns the pilot's last fresh command into setpoints and runs
- *    the link loss failsafe (webctrl_core.c). Telemetry goes out at 20 Hz.
+ *  - A 100 Hz task turns the pilot's last fresh command (plus trim) into
+ *    setpoints and runs the link loss failsafe and the battery protection
+ *    (webctrl_core.c). Telemetry goes out at 20 Hz.
  *
  * Protocol and behaviour: docs/webcontrol.md
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,6 +45,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
+#include "nvs.h"
 
 #include "config.h"
 #include "commander.h"
@@ -69,6 +72,10 @@ static const char *TAG = "WEBCTRL";
 /* Same thrust limits as the CRTP commander (crtp_commander_rpyt.c) */
 #define WEB_MAX_THRUST        60000.0f
 #define WEB_MIN_THRUST        1000.0f
+
+#define WEBCTRL_NVS_NAMESPACE "webctrl"
+#define WEBCTRL_NVS_TRIM      "trim"
+#define WEBCTRL_TRIM_SAVE_MS  1000   /* save this long after the last change */
 
 extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
 extern const uint8_t index_html_gz_end[] asm("_binary_index_html_gz_end");
@@ -97,6 +104,10 @@ static const wcConfig_t cfg = {
     .descendFactor = CONFIG_WEBCTRL_DESCEND_PERCENT / 100.0f,
     .maxAngleDeg = CONFIG_WEBCTRL_MAX_ANGLE_DEG,
     .maxYawRateDeg = CONFIG_WEBCTRL_MAX_YAW_RATE_DEG,
+    .batLandMv = CONFIG_WEBCTRL_BAT_LAND_MV,
+    .batArmMinMv = CONFIG_WEBCTRL_BAT_ARM_MIN_MV,
+    .batLandDelayMs = CONFIG_WEBCTRL_BAT_LAND_DELAY_MS,
+    .batLandTimeMs = CONFIG_WEBCTRL_BAT_LAND_TIME_MS,
 };
 
 static SemaphoreHandle_t lock;
@@ -114,6 +125,14 @@ static wcLink_t pilotLink;
 static wcHover_t hover;
 static wcStage_t pilotStage = WC_STAGE_OFF;
 static wcSetpoint_t lastOut;
+static wcBattery_t batState;
+static uint8_t lastStopReason = WC_STOP_NONE;   /* wcStopReason_t, shown by the pages */
+
+/* Trim of the web pilot. It is stored on the drone (NVS): it belongs to the
+ * drone, and captive portal windows may forget their own storage. */
+static wcTrim_t trim;
+static bool trimDirty;               /* changed, not saved yet */
+static uint32_t trimChangedMs;
 
 static char apIpStr[16];
 static char portalUri[40];
@@ -203,12 +222,13 @@ static void startPilotSession(int idx, const wcControl_t *cmd, uint32_t t)
     pilotLink.connected = true;
     wcLinkOnControl(&pilotLink, &cfg, t, cmd);
     wcHoverReset(&hover);
+    wcBatteryNewSession(&batState);
     pilotStage = WC_STAGE_OK;
     ESP_LOGI(TAG, "armed by browser (fd %d)", clients[idx].fd);
 }
 
 /* failsafe: the pilot has to release ARM before arming again */
-static void endPilotSession(bool failsafe, const char *why)
+static void endPilotSession(bool failsafe, wcStopReason_t reason, const char *why)
 {
     systemReleaseArm(ARM_SOURCE_WEB);
     if (pilotIdx >= 0 && failsafe) {
@@ -217,6 +237,7 @@ static void endPilotSession(bool failsafe, const char *why)
     pilotToken = 0;
     pilotIdx = -1;
     pilotStage = WC_STAGE_OFF;
+    lastStopReason = (uint8_t)reason;
     memset(&lastOut, 0, sizeof(lastOut));
 
     // Leave a zero setpoint in the commander so nobody can pick up the last
@@ -231,8 +252,9 @@ static void emergencyStop(int killerIdx)
     // Any connected browser may stop the drone, whoever flies it.
     systemForceDisarm();
     if (pilotToken != 0) {
-        endPilotSession(true, "KILL");
+        endPilotSession(true, WC_STOP_KILL, "KILL");
     } else {
+        lastStopReason = WC_STOP_KILL;
         const wcSetpoint_t zero = {0};
         sendSetpoint(&zero);
         ESP_LOGW(TAG, "KILL from browser (fd %d)", clients[killerIdx].fd);
@@ -265,7 +287,7 @@ static void handleControl(int idx, const wcControl_t *cmd, uint32_t t)
         c->echoClientMs = cmd->clientMs;
         if (!(cmd->flags & WC_FLAG_ARM)) {
             c->armReleased = true;
-            endPilotSession(false, "pilot released ARM");
+            endPilotSession(false, WC_STOP_RELEASED, "pilot released ARM");
         }
         return;
     }
@@ -287,7 +309,7 @@ static void handleControl(int idx, const wcControl_t *cmd, uint32_t t)
     const armSource_t owner = systemGetArmOwner();
     const wcArmInputs_t in = {
         .systemReady = systemReady(),
-        .lowBattery = pmIsBatteryLow(),
+        .lowBattery = pmIsBatteryLow() || wcBatteryArmBlocked(&batState, &cfg),
         .tumbled = sitAwTuDetected(),
         .otherPilot = owner != ARM_SOURCE_NONE && owner != ARM_SOURCE_WEB,
         .releasedSinceStop = c->armReleased,
@@ -313,13 +335,16 @@ static void sendInfo(int fd, bool resumed)
     int n = snprintf(json, sizeof(json),
                      "{\"t\":\"info\",\"proto\":%d,\"fw\":\"%s\",\"device\":\"%s\",\"resumed\":%s,"
                      "\"maxAngle\":%d,\"maxYawRate\":%d,\"telemetryHz\":%d,"
-                     "\"failsafe\":{\"ok\":%d,\"hold\":%d,\"descend\":%d,\"off\":%d,\"stale\":%d}}",
+                     "\"failsafe\":{\"ok\":%d,\"hold\":%d,\"descend\":%d,\"off\":%d,\"stale\":%d},"
+                     "\"battery\":{\"land\":%d,\"arm\":%d,\"landTime\":%d},\"trimMax\":%d}",
                      WC_PROTOCOL_VERSION, app->version, platformConfigGetDeviceTypeName(),
                      resumed ? "true" : "false",
                      CONFIG_WEBCTRL_MAX_ANGLE_DEG, CONFIG_WEBCTRL_MAX_YAW_RATE_DEG,
                      CONFIG_WEBCTRL_TELEMETRY_HZ,
                      CONFIG_WEBCTRL_OK_MS, CONFIG_WEBCTRL_HOLD_MS, CONFIG_WEBCTRL_DESCEND_MS,
-                     CONFIG_WEBCTRL_OFF_MS, CONFIG_WEBCTRL_STALE_MS);
+                     CONFIG_WEBCTRL_OFF_MS, CONFIG_WEBCTRL_STALE_MS,
+                     CONFIG_WEBCTRL_BAT_LAND_MV, CONFIG_WEBCTRL_BAT_ARM_MIN_MV,
+                     CONFIG_WEBCTRL_BAT_LAND_TIME_MS, WC_TRIM_MAX);
     if (n <= 0 || n >= (int)sizeof(json)) {
         return;
     }
@@ -361,6 +386,16 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
                 clients[idx].helloSeen = true;
                 clients[idx].txPending = false;   // drop any snapshot from before HELLO
                 sendInfoFrame = true;
+            }
+        } else if (buf[0] == WC_MSG_TRIM) {
+            wcTrim_t tr;
+            // On the ground every page may trim, in flight only the pilot.
+            if (wcDecodeTrim(buf, len, &tr) && (pilotToken == 0 || idx == pilotIdx) &&
+                (tr.roll != trim.roll || tr.pitch != trim.pitch)) {
+                trim = tr;
+                trimDirty = true;
+                trimChangedMs = t;
+                ESP_LOGI(TAG, "trim roll %.1f, pitch %.1f deg", tr.roll / 10.0, tr.pitch / 10.0);
             }
         }
     }
@@ -632,7 +667,10 @@ static void buildTelemetry(uint32_t now)
     const bool ready = systemReady();
     const bool lowBat = pmIsBatteryLow();
     const bool tumbled = sitAwTuDetected();
-    const float vbat = pmGetBatteryVoltage();
+    const float vbat = batState.volts;   // filtered
+    // "Too low to arm" only on the ground: under load the voltage sags anyway.
+    const uint8_t state2 = (uint8_t)((session && batState.landing ? WC_STATE2_BAT_LANDING : 0) |
+                                     (!session && wcBatteryArmBlocked(&batState, &cfg) ? WC_STATE2_BAT_NO_ARM : 0));
     const int16_t roll = centiDeg(logFloatOrZero(logRoll));
     const int16_t pitch = centiDeg(logFloatOrZero(logPitch));
     const int16_t yaw = centiDeg(logFloatOrZero(logYaw));
@@ -679,6 +717,9 @@ static void buildTelemetry(uint32_t now)
         t.pitchCdeg = pitch;
         t.yawCdeg = yaw;
         t.thrustOut = (uint16_t)(session ? lastOut.thrust * WC_THRUST_MAX : 0);
+        t.state2 = state2;
+        t.stopReason = lastStopReason;
+        t.trim = trim;
         t.uptimeMs = now;
         if (i == pilotIdx) {
             t.staleDrops = pilotLink.staleDrops;
@@ -694,25 +735,38 @@ static void buildTelemetry(uint32_t now)
 static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
 {
     wcSetpoint_t out = {0};
+    const float vbat = pmGetBatteryVoltage();
 
     // Everything under the lock, including sending the setpoint: a KILL that
     // is handled in between must not be followed by a stale non-zero setpoint.
     xSemaphoreTake(lock, portMAX_DELAY);
 
-    if (pilotToken != 0) {
+    const bool session = pilotToken != 0;
+    const bool flying = session && lastOut.thrust >= WC_HOVER_FLYING_THRUST;
+    const float landFrom = wcHoverValid(&hover) ? fminf(hover.value, lastOut.thrust) : lastOut.thrust;
+    const wcBatEvent_t batEvent = wcBatteryUpdate(&batState, &cfg, now, dt, vbat, session, flying, landFrom);
+
+    if (session) {
         if (systemGetArmOwner() != ARM_SOURCE_WEB) {
             // Arm taken away elsewhere (system.forceArm cleared, emergency stop)
-            endPilotSession(true, "arm lost");
+            endPilotSession(true, WC_STOP_ARM_LOST, "arm lost");
         } else if (sitAwTuDetected()) {
-            endPilotSession(true, "tumbled");
+            endPilotSession(true, WC_STOP_TUMBLED, "tumbled");
+        } else if (batEvent == WC_BAT_EMPTY) {
+            endPilotSession(true, WC_STOP_BATTERY, "battery empty");
         } else {
+            if (batEvent == WC_BAT_LAND) {
+                ESP_LOGW(TAG, "battery %.2f V: forced landing from thrust %.2f",
+                         (double)batState.volts, (double)batState.landFrom);
+            }
             const wcStage_t stage = wcStageForAge(&cfg, wcLinkAge(&pilotLink, &cfg, now));
             wcSetpoint_t last;
-            wcControlToSetpoint(&cfg, &pilotLink.last, &last);
-            if (stage == WC_STAGE_OK) {
+            wcControlToSetpoint(&cfg, &pilotLink.last, &trim, &last);
+            if (stage == WC_STAGE_OK && !batState.landing) {
                 wcHoverUpdate(&hover, last.thrust, dt);
             }
-            wcFailsafeOutput(&cfg, stage, &last, &hover, &out);
+            wcFailsafeOutput(&cfg, stage, &last, &hover, &trim, &out);
+            out.thrust = fminf(out.thrust, wcBatteryThrustCap(&batState, &cfg, now));
 
             if (stage != pilotStage) {
                 if (stage >= WC_STAGE_LEVEL) {
@@ -725,7 +779,10 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
             }
 
             if (stage == WC_STAGE_OFF) {
-                endPilotSession(true, "link lost, failsafe ended");
+                endPilotSession(true, WC_STOP_LINK, "link lost, failsafe ended");
+            } else if (batState.landing && (out.thrust <= 0.0f || last.thrust <= 0.0f)) {
+                // The ramp ran out, or the pilot pulled the throttle down after touchdown.
+                endPilotSession(true, WC_STOP_BATTERY, "battery empty, landed");
             } else {
                 lastOut = out;
                 sendSetpoint(&out);
@@ -742,6 +799,55 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
     }
 
     xSemaphoreGive(lock);
+}
+
+static void trimLoad(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        return;   // nothing stored yet
+    }
+    int8_t v[2];
+    size_t len = sizeof(v);
+    if (nvs_get_blob(h, WEBCTRL_NVS_TRIM, v, &len) == ESP_OK && len == sizeof(v) &&
+        v[0] >= -WC_TRIM_MAX && v[0] <= WC_TRIM_MAX && v[1] >= -WC_TRIM_MAX && v[1] <= WC_TRIM_MAX) {
+        trim.roll = v[0];
+        trim.pitch = v[1];
+        ESP_LOGI(TAG, "trim roll %.1f, pitch %.1f deg", trim.roll / 10.0, trim.pitch / 10.0);
+    }
+    nvs_close(h);
+}
+
+/*
+ * Writing the flash switches the cache off for a few milliseconds, which
+ * stalls the flight task. So the trim is only saved while nobody can fly.
+ */
+static void trimSaveWhenIdle(uint32_t now)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    const bool save = trimDirty && pilotToken == 0 && systemGetArmOwner() == ARM_SOURCE_NONE &&
+                      now - trimChangedMs >= WEBCTRL_TRIM_SAVE_MS;
+    const int8_t v[2] = {trim.roll, trim.pitch};
+    if (save) {
+        trimDirty = false;
+    }
+    xSemaphoreGive(lock);
+    if (!save) {
+        return;
+    }
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, WEBCTRL_NVS_TRIM, v, sizeof(v));
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "saving the trim failed: %s", esp_err_to_name(err));
+    }
 }
 
 static void setupCaptivePortal(void)
@@ -784,6 +890,7 @@ static void webctrlTask(void *arg)
     logRoll = logGetVarId("stabilizer", "roll");
     logPitch = logGetVarId("stabilizer", "pitch");
     logYaw = logGetVarId("stabilizer", "yaw");
+    trimLoad();
 
     setupCaptivePortal();
     if (!startServers()) {
@@ -806,6 +913,7 @@ static void webctrlTask(void *arg)
         last = now;
 
         supervise(now, dt, &rateWindowStart);
+        trimSaveWhenIdle(now);
 
         if (now - lastTelemetry >= telemetryPeriodMs && !telemetryQueued) {
             lastTelemetry = now;
@@ -834,6 +942,7 @@ void webctrlLaunch(void)
     lock = xSemaphoreCreateMutex();
     wcLinkReset(&pilotLink);
     wcHoverReset(&hover);
+    wcBatteryReset(&batState);
 
     xTaskCreatePinnedToCore(webctrlTask, WEBCTRL_TASK_NAME, WEBCTRL_TASK_STACKSIZE, NULL,
                             WEBCTRL_TASK_PRI, NULL, NETWORK_TASK_CORE);
@@ -845,4 +954,6 @@ LOG_ADD(LOG_UINT16, staleDrops, &pilotLink.staleDrops)
 LOG_ADD(LOG_UINT32, delayMs, &pilotLink.lastDelayMs)
 LOG_ADD(LOG_FLOAT, hover, &hover.value)
 LOG_ADD(LOG_UINT32, txSkipped, &telemetrySkipped)
+LOG_ADD(LOG_FLOAT, vbat, &batState.volts)
+LOG_ADD(LOG_UINT8, batLanding, &batState.landing)
 LOG_GROUP_STOP(webctrl)

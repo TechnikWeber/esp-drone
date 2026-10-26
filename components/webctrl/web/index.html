@@ -43,6 +43,13 @@ button:disabled{opacity:.45}
 #sky{position:absolute;left:-50%;top:-50%;width:200%;height:100%;background:#2b5f8f;transform-origin:50% 100%}
 #hz-mark{position:absolute;left:30%;right:30%;top:50%;height:2px;background:#ffd479}
 #stats{color:var(--dim);font-size:12px;text-align:center;font-variant-numeric:tabular-nums;white-space:pre-line}
+#trim{display:none;grid-template-columns:40px 62px 40px;grid-template-rows:repeat(3,35px);gap:3px}
+#trim button{padding:0;font-size:15px;border-radius:8px}
+#trimVal{display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;line-height:1.3;color:var(--dim);font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:8px;background:#0e141b}
+#trimVal.set{color:#ffd479}
+#mid.trimming #horizon{display:none}
+#mid.trimming #trim{display:grid}
+#trimBtn.on{background:#1f3a5a;border-color:var(--accent)}
 #rotate,#dlg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0b0f14f2;z-index:5;padding:20px;text-align:center}
 #dlg .box{max-width:560px;max-height:90vh;overflow:auto;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;user-select:text;-webkit-user-select:text;touch-action:pan-y}
 #dlg h2{margin:.2em 0 .5em;font-size:18px}#dlg p{margin:.5em 0;color:#c8d1db}#dlg small{color:var(--dim)}
@@ -56,6 +63,7 @@ button:disabled{opacity:.45}
     <span class="pill" id="bat">Akku –</span>
     <span class="pill" id="state">Gesperrt</span>
     <span class="grow"></span>
+    <button id="trimBtn">Trimm</button>
     <button id="fs">Vollbild</button>
     <button id="info">Info</button>
   </div>
@@ -65,6 +73,11 @@ button:disabled{opacity:.45}
     <div id="mid">
       <button id="arm" disabled><div class="fill"></div><span>Nicht bereit</span></button>
       <div id="horizon"><div id="sky"></div><div id="hz-mark"></div></div>
+      <div id="trim">
+        <span></span><button data-ax="p" data-d="1" aria-label="Trimm vorwärts">▲</button><span></span>
+        <button data-ax="r" data-d="-1" aria-label="Trimm links">◀</button><div id="trimVal"><span id="trimR">R 0,0°</span><span id="trimP">N 0,0°</span></div><button data-ax="r" data-d="1" aria-label="Trimm rechts">▶</button>
+        <span></span><button data-ax="p" data-d="-1" aria-label="Trimm rückwärts">▼</button><span></span>
+      </div>
       <div id="stats">–</div>
       <button id="kill">NOT-AUS</button>
     </div>
@@ -77,6 +90,8 @@ button:disabled{opacity:.45}
   <p id="dinfo">–</p>
   <p><b>Bedienung:</b> Linker Stick: hoch/runter = Gas (bleibt stehen), links/rechts = drehen. Rechter Stick: vor/zurück und seitwärts. Zum Scharfschalten Gas ganz runter und „Scharfschalten“ 1&nbsp;Sekunde halten. NOT-AUS stoppt die Motoren sofort, egal wer steuert.</p>
   <p><b>Verbindungsverlust:</b> Kurze Aussetzer überbrückt die Drohne, danach richtet sie sich gerade aus, sinkt ab und schaltet die Motoren ab (<span id="dfs">–</span>).</p>
+  <p><b>Trimmen:</b> Driftet die Drohne beim Schweben von allein zur Seite, „Trimm“ antippen und mit den Pfeilen gegensteuern (je 0,5°, höchstens ±5°): Driftet sie nach rechts, ◀ tippen. Lange auf die Mitte drücken setzt auf 0. Die Drohne speichert die Werte selbst; im Flug darf nur der Pilot trimmen.</p>
+  <p><b>Akku:</b> <span id="dbat">–</span></p>
   <p><b>Sicherheit:</b> Propeller können verletzen. Nur in sicherer Umgebung fliegen, Abstand zu Personen halten.</p>
   <p><small>ESP-Drone Web Control · Copyright © 2026 Philipp Weber.
   Basiert auf ESP-Drone (© Espressif Systems) und der Crazyflie-Firmware (© Bitcraze AB).
@@ -89,9 +104,13 @@ button:disabled{opacity:.45}
 <script>
 "use strict";
 // ---- protocol (docs/webcontrol.md) --------------------------------------
-const MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 36;
+const PROTO = 2, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 40;
 const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
 const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
+const S2_BAT_LAND = 1, S2_BAT_NOARM = 2;
+const STOP_REASONS = ["", "Entschärft", "NOT-AUS – Motoren aus", "Verbindung verloren – Motoren aus, neu scharfschalten",
+  "Drohne lag auf dem Kopf – Motoren aus", "Akku leer – gelandet, bitte laden", "Andere Steuerung hat entschärft"];
+const TRIM_STEP = 5;   // 0.5° in 1/10°
 const STAGES = ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich gerade aus",
   "Verbindung weg – Drohne sinkt ab", "Motoren aus"];
 const ARM_REASONS = ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, Drohne still hinstellen)", "Gas ganz runter zum Scharfschalten",
@@ -169,12 +188,12 @@ function connect() {
   ws.onopen = () => {
     wsOpen = true; reconnectDelay = 250; lastTel = performance.now();
     const b = new DataView(new ArrayBuffer(8));
-    b.setUint8(0, MSG_HELLO); b.setUint8(1, 1); b.setUint32(4, token, true);
+    b.setUint8(0, MSG_HELLO); b.setUint8(1, PROTO); b.setUint32(4, token, true);
     ws.send(b.buffer);
   };
   ws.onmessage = ev => {
     if (typeof ev.data === "string") { try { const j = JSON.parse(ev.data); if (j.t === "info") onInfo(j); } catch (e) {} return; }
-    if (ev.data.byteLength === TELEMETRY_LEN) onTelemetry(new DataView(ev.data));
+    if (ev.data.byteLength >= TELEMETRY_LEN) onTelemetry(new DataView(ev.data));
   };
   ws.onclose = () => { wsOpen = false; ready = false; scheduleReconnect(); };
   ws.onerror = () => { try { ws.close(); } catch (e) {} };
@@ -189,6 +208,10 @@ function onInfo(j) {
   const f = j.failsafe || {};
   $("dinfo").textContent = `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`;
   $("dfs").textContent = `halten bis ${f.hold} ms, gerade ausrichten bis ${f.descend} ms, Motoren aus nach ${f.off} ms; Befehle älter als ${f.stale} ms werden verworfen`;
+  const b = j.battery || {}, volt = mv => (mv / 1000).toFixed(1).replace(".", ",") + " V";
+  $("dbat").textContent = (b.land ? `Fällt die Spannung im Flug unter ${volt(b.land)}, landet die Drohne von selbst: Du lenkst weiter, ` +
+    `aber der Schub sinkt in ${Math.round(b.landTime / 1000)} s auf null. Nach dem Aufsetzen Gas ganz runter.` : "Automatisches Landen ist abgeschaltet.") +
+    (b.arm ? ` Unter ${volt(b.arm)} lässt sie sich nicht scharfschalten.` : "");
 }
 function onTelemetry(v) {
   // Only telemetry after the answer to HELLO tells whether our session was resumed.
@@ -198,23 +221,31 @@ function onTelemetry(v) {
     rxRate: v.getUint16(6, true), echoMs: v.getUint32(8, true), vbat: v.getUint16(12, true) / 1000,
     roll: v.getInt16(14, true) / 100, pitch: v.getInt16(16, true) / 100, yaw: v.getInt16(18, true) / 100,
     thrust: v.getUint16(20, true) / 1000, stale: v.getUint16(22, true), delay: v.getUint16(24, true),
-    uptime: v.getUint32(28, true), token: v.getUint32(32, true),
+    state2: v.getUint8(26), stopReason: v.getUint8(27),
+    uptime: v.getUint32(28, true), token: v.getUint32(32, true), trimR: v.getInt8(36), trimP: v.getInt8(37),
   };
   const now = performance.now();
+  const wasFlying = !!(tel && (tel.state & S_ARMED) && (tel.state & S_YOU));
   lastTel = now; tel = t;
   const r = (ms32() - t.echoMs) >>> 0;
   if (t.echoMs && r < 10000) rtt = rtt < 0 ? r : rtt * 0.8 + r * 0.2;
 
   if (t.token) { token = t.token; store.set("wc_token", String(token)); }
   const flying = (t.state & S_ARMED) && (t.state & S_YOU);
+  // Why the drone stopped. After a stop the drone also answers "release ARM
+  // first" to our ARM flag, so the stop reason wins when we were flying.
+  const stopText = (t.stopReason > 1 && STOP_REASONS[t.stopReason]) || "";
+  const stopCls = t.stopReason === 5 ? "bad" : "warn";
   if (!ready) {
     // first telemetry after (re)connect: take over the drone's view of the arm state
+    if (armReq && !flying && stopText) toast(stopText, stopCls);
     armReq = !!flying; ready = true;
     if (resumeThr !== null) { sticks.thr = flying ? resumeThr : 0; resumeThr = null; drawLeft(); }
   } else if (armReq && !flying && now - armSince > 600) {
     armReq = false;
-    toast(t.armResult ? ARM_REASONS[t.armResult] :
-      (t.state & S_BLOCKED) ? "Motoren aus (Not-Aus oder Verbindungsverlust) – neu scharfschalten" : "Entschärft", "warn");
+    if (wasFlying && stopText) toast(stopText, stopCls);
+    else if (t.armResult) toast(ARM_REASONS[t.armResult], "warn");
+    else toast((t.state & S_BLOCKED) ? "Motoren aus – neu scharfschalten" : "Entschärft", "warn");
   }
   if (!flying && !armReq && token) { token = 0; store.set("wc_token", "0"); }
   render();
@@ -267,6 +298,53 @@ $("kill").addEventListener("pointerdown", () => {
   armReq = false; killUntil = performance.now() + 400; buzz([80, 40, 80]);
   sendControl(F_KILL, true); toast("NOT-AUS gesendet", "bad");
 });
+// ---- trim (stored on the drone, shown from the telemetry) -----------------
+let trimShown = null, trimPendingUntil = 0, trimResetTimer = 0;
+function trimNow() {
+  if (trimShown && performance.now() < trimPendingUntil) return trimShown;   // sent, not yet confirmed
+  return tel ? { r: tel.trimR, p: tel.trimP } : { r: 0, p: 0 };
+}
+function trimAllowed() {   // in flight only the pilot may trim, as on the drone
+  return wsOpen && infoSeen && tel && performance.now() - lastTel < TELEMETRY_WARN_MS && !((tel.state & S_ARMED) && !(tel.state & S_YOU));
+}
+function sendTrim(r, p) {
+  if (!trimAllowed()) return false;
+  const b = new DataView(new ArrayBuffer(4));
+  b.setUint8(0, MSG_TRIM); b.setInt8(1, r); b.setInt8(2, p);
+  ws.send(b.buffer);
+  trimShown = { r, p }; trimPendingUntil = performance.now() + 1000;
+  renderTrim();
+  return true;
+}
+document.querySelectorAll("#trim button").forEach(btn => btn.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const cur = trimNow(), max = (info && info.trimMax) || 50, d = Number(btn.dataset.d) * TRIM_STEP;
+  const r = btn.dataset.ax === "r" ? Math.max(-max, Math.min(max, cur.r + d)) : cur.r;
+  const p = btn.dataset.ax === "p" ? Math.max(-max, Math.min(max, cur.p + d)) : cur.p;
+  if (r === cur.r && p === cur.p) { buzz(60); toast("Trimmung am Anschlag (±5°)", "warn"); return; }
+  if (sendTrim(r, p)) buzz(15);
+}));
+const trimVal = $("trimVal");
+trimVal.addEventListener("pointerdown", () => {
+  clearTimeout(trimResetTimer);
+  trimResetTimer = setTimeout(() => { if (sendTrim(0, 0)) { buzz(40); toast("Trimmung auf 0 gesetzt", "info"); } }, 800);
+});
+["pointerup", "pointercancel", "pointerleave"].forEach(ev => trimVal.addEventListener(ev, () => clearTimeout(trimResetTimer)));
+$("trimBtn").onclick = () => {
+  const on = $("mid").classList.toggle("trimming");
+  $("trimBtn").classList.toggle("on", on);
+  renderTrim();
+};
+function fmtTrim(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + (Math.abs(v) / 10).toFixed(1).replace(".", ",") + "°"; }
+function renderTrim() {
+  const t = trimNow(), set = t.r !== 0 || t.p !== 0, ok = trimAllowed();
+  $("trimR").textContent = "R " + fmtTrim(t.r);
+  $("trimP").textContent = "N " + fmtTrim(t.p);
+  trimVal.classList.toggle("set", set);
+  document.querySelectorAll("#trim button").forEach(b => { b.disabled = !ok; });
+  $("trimBtn").textContent = set ? "Trimm •" : "Trimm";
+}
+
 $("info").onclick = () => { $("dlg").style.display = "flex"; };
 $("dclose").onclick = () => { $("dlg").style.display = "none"; };
 const fsBtn = $("fs");
@@ -281,7 +359,7 @@ document.addEventListener("contextmenu", e => e.preventDefault());
 let toastUntil = 0;
 function toast(text, cls) { const m = $("msg"); m.textContent = text; m.className = cls; toastUntil = performance.now() + 2500; }
 function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
-let lastBuzzStage = 0;
+let lastBuzzStage = 0, lastBatLand = false;
 function batteryPercent(v) {
   const tbl = [3.0, 3.78, 3.83, 3.87, 3.89, 3.92, 3.96, 4.0, 4.04, 4.1];
   if (v <= tbl[0]) return 0;
@@ -294,10 +372,11 @@ function render() {
   const live = wsOpen && tel && age < TELEMETRY_WARN_MS;
   $("cdot").className = "dot " + (live ? (rtt < 80 ? "ok" : "warn") : (wsOpen ? "warn" : ""));
   $("ctext").textContent = !wsOpen ? "Getrennt" : !live ? "Gestört" : `${Math.round(rtt)} ms`;
+  renderTrim();
   if (!tel) return;
-  const s = tel.state, flying = (s & S_ARMED) && (s & S_YOU);
+  const s = tel.state, s2 = tel.state2, flying = (s & S_ARMED) && (s & S_YOU);
   $("bat").textContent = tel.vbat > 0 ? `${tel.vbat.toFixed(2)} V · ${batteryPercent(tel.vbat)} %` : "Akku –";
-  $("bat").style.color = (s & S_LOWBAT) ? "var(--bad)" : "";
+  $("bat").style.color = ((s & S_LOWBAT) || (s2 & (S2_BAT_LAND | S2_BAT_NOARM))) ? "var(--bad)" : "";
   $("state").textContent = flying ? "SCHARF" : (s & S_OTHER) ? "Fremd­steuerung" : (s & S_READY) ? "Gesperrt" : "Nicht bereit";
   $("state").style.color = flying ? "var(--bad)" : "";
   $("sky").style.transform = `translateY(${Math.max(-40, Math.min(40, tel.pitch)) * 1.2}%) rotate(${-tel.roll}deg)`;
@@ -309,15 +388,21 @@ function render() {
   if (armReq) { label.textContent = "Entschärfen"; armBtn.disabled = false; }
   else if (!(s & S_READY)) { label.textContent = "Nicht bereit"; armBtn.disabled = true; }
   else if (s & S_OTHER) { label.textContent = "Belegt"; armBtn.disabled = true; }
+  else if (s2 & S2_BAT_NOARM) { label.textContent = "Akku leer"; armBtn.disabled = true; }
   else { label.textContent = "Scharfschalten"; armBtn.disabled = false; }
 
+  const batLand = !!(flying && (s2 & S2_BAT_LAND));
+  if (batLand && !lastBatLand) buzz([300, 100, 300, 100, 300]);
+  lastBatLand = batLand;
   if (now < toastUntil) return;
   const m = $("msg");
   let text = "", cls = "info";
   if (!live) { text = wsOpen ? "Verbindung gestört – Drohne übernimmt nach kurzer Zeit selbst" : "Keine Verbindung – suche Drohne…"; cls = "bad"; }
   else if (flying && tel.stage >= 1) { text = STAGES[tel.stage]; cls = tel.stage >= 2 ? "bad" : "warn"; }
+  else if (batLand) { text = "Akku leer – Drohne landet. Nach dem Aufsetzen Gas ganz runter"; cls = "bad"; }
   else if (s & S_TUMBLED) { text = "Drohne liegt auf dem Kopf"; cls = "bad"; }
-  else if (s & S_LOWBAT) { text = "Akku schwach – landen"; cls = "warn"; }
+  else if (flying && (s & S_LOWBAT)) { text = "Akku schwach – bitte bald landen"; cls = "warn"; }
+  else if (!flying && ((s2 & S2_BAT_NOARM) || (s & S_LOWBAT))) { text = "Akku leer – bitte laden"; cls = "warn"; }
   else if (s & S_OTHER) { text = "Eine andere Steuerung fliegt gerade"; cls = "warn"; }
   else if (!(s & S_READY)) { text = "Drohne kalibriert – bitte still hinstellen"; cls = "warn"; }
   else if (flying) { text = "Bereit – viel Spaß"; cls = "ok"; }

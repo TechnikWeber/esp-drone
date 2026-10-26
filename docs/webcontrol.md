@@ -16,7 +16,7 @@ Handy (Browser)                         Drohne (ESP32)
 ───────────────                         ─────────────────────────────────────────
 DNS: jede Anfrage  ───── UDP 53 ─────▶  Captive-DNS: alles → 192.168.43.42
 Portal-Prüfung     ───── HTTP :80 ───▶  Portal-Server: unbekannte URLs → 302 auf /
-Steuerseite (7 KB) ◀──── HTTP :80 ────  index.html (gzip, in der Firmware)
+Steuerseite (9 KB) ◀──── HTTP :80 ────  index.html (gzip, in der Firmware)
 Steuerbefehle 50 Hz ──── WS :81 ─────▶  Control-Server ─▶ webctrl_core (Failsafe)
 Telemetrie 20 Hz   ◀──── WS :81 ──────                    └▶ Commander (Prio WEB)
 ```
@@ -76,6 +76,45 @@ Neuübertragung trifft ein Schwall alter Befehle auf einmal ein. Dagegen:
 
 Alle Zeiten sind in `menuconfig` einstellbar.
 
+## Akku-Schutz
+
+Die Drohne glättet die Akkuspannung (Zeitkonstante 0,5 s), weil sie mit dem Gas
+springt. Dann gilt:
+
+| Lage | Verhalten |
+|---|---|
+| am Boden unter 3,4 V | Scharfschalten gesperrt, die Seite zeigt „Akku leer – bitte laden“ |
+| im Flug 1 s lang unter 3,0 V | **Notlandung:** Du lenkst weiter, aber der Schub ist begrenzt. Die Grenze beginnt beim Schwebeschub und sinkt in 10 s auf null, dann ist die Drohne entschärft. Gas ganz runter beendet die Landung sofort. |
+| scharf am Boden 1 s lang unter 3,0 V | sofort entschärft |
+
+Zusätzlich meldet ESP-Drone „Akku schwach“, wenn die Spannung 5 s unter 3,2 V
+liegt. Das ist bei App und cfclient der einzige Akku-Schutz; Notlandung und
+Startsperre gibt es nur mit der Web-Steuerung. Unter 0,5 V (kein Akku, nur USB)
+entfallen die Prüfungen. Einstellbar in
+`menuconfig` → *ESPDrone web control* → *Battery protection*. Die Werte gelten
+für einen 1S-LiPo; die angezeigte Spannung vorher mit einem Multimeter
+vergleichen.
+
+Wie beim Verbindungsverlust ist auch die Notlandung ohne Höhensensor ungeregelt.
+Aus 1–2 m Höhe setzt die Drohne nach etwa 2 s mit 1,5–2,5 m/s auf.
+
+## Trimmen
+
+Driftet die Drohne beim Schweben von allein zur Seite, gleicht die Trimmung das
+aus: „Trimm“ in der Leiste antippen, dann mit den Pfeilen in Schritten von 0,5°
+gegensteuern, höchstens ±5°. Driftet sie nach rechts, ◀ tippen. Ein langer Druck
+auf die Mitte setzt auf 0.
+
+- Die Trimmung wird zu Rollen und Nicken addiert; die Summe bleibt innerhalb
+  des maximalen Winkels. Im Failsafe richtet sich die Drohne auf die Trimmung
+  aus statt auf 0°.
+- Die **Drohne** speichert die Werte im NVS, nicht das Handy. Sie gehören zur
+  Drohne, und das Portal-Fenster auf iPhones vergisst seinen Speicher.
+  Geschrieben wird erst, wenn niemand scharf ist, weil Flash-Schreiben den
+  Flugregler kurz anhält.
+- Am Boden darf jedes Handy trimmen, im Flug nur der Pilot.
+- Die Trimmung gilt nur für die Web-Steuerung, nicht für App oder cfclient.
+
 ## Scharfschalten und Piloten
 
 - Die Drohne startet **gesperrt**. Scharf schaltet immer nur eine Quelle:
@@ -88,11 +127,14 @@ Alle Zeiten sind in `menuconfig` einstellbar.
 - **NOT-AUS** darf jedes verbundene Handy auslösen. Er entschärft jeden
   Piloten, auch App oder cfclient.
 - Weitere Handys sehen die Telemetrie, steuern aber nicht.
+- Schaltet die Drohne ab, zeigt die Seite den Grund: NOT-AUS, Verbindung
+  verloren, Überschlag oder Akku leer.
 
 ## Protokoll
 
 Binäre WebSocket-Frames, Little Endian. Definiert in
-`components/webctrl/include/webctrl_core.h`.
+`components/webctrl/include/webctrl_core.h`. Version 2: TRIM-Nachricht,
+Telemetrie mit 40 statt 36 Bytes (Akku-Zustand, Abschaltgrund, Trimmung).
 
 ### CONTROL (Seite → Drohne, 16 Bytes, 50 Hz)
 
@@ -115,13 +157,26 @@ Frames (Länge, Typ, Wertebereich, unbekannte Flags) werden ignoriert.
 | Offset | Typ | Feld |
 |---|---|---|
 | 0 | u8 | `0x02` |
-| 1 | u8 | Protokollversion (1) |
+| 1 | u8 | Protokollversion (2) |
 | 4 | u32 | Sitzungs-Token, 0 = neue Sitzung |
 
 Die Drohne antwortet mit einem Text-Frame `{"t":"info", …}` (Firmware,
-Gerät, Grenzwerte, `resumed`). Telemetrie gibt es erst nach dem HELLO.
+Gerät, Grenzwerte, Failsafe-Zeiten, Akku-Grenzen `battery`, `trimMax`,
+`resumed`). Telemetrie gibt es erst nach dem HELLO.
 
-### TELEMETRY (Drohne → Seite, 36 Bytes, 20 Hz)
+### TRIM (Seite → Drohne, 4 Bytes, bei jeder Änderung)
+
+| Offset | Typ | Feld |
+|---|---|---|
+| 0 | u8 | `0x03` |
+| 1 | i8 | Rollen-Trimmung in 1/10° (+ = rechts), −50…50 |
+| 2 | i8 | Nick-Trimmung in 1/10° (+ = vorwärts), −50…50 |
+| 3 | u8 | reserviert (0) |
+
+Absolute Werte. Die Drohne übernimmt sie am Boden von jedem Handy, im Flug nur
+vom Piloten, und meldet die gültigen Werte in der Telemetrie zurück.
+
+### TELEMETRY (Drohne → Seite, 40 Bytes, 20 Hz)
 
 | Offset | Typ | Feld |
 |---|---|---|
@@ -137,17 +192,23 @@ Gerät, Grenzwerte, `resumed`). Telemetrie gibt es erst nach dem HELLO.
 | 20 | u16 | Schub an den Regler 0…1000 |
 | 22 | u16 | verworfene verspätete Befehle |
 | 24 | u16 | Zusatzverzögerung des letzten Befehls in ms |
+| 26 | u8 | Status 2: bit0 Notlandung (Akku leer), bit1 Akku zu schwach zum Scharfschalten (nur am Boden) |
+| 27 | u8 | Grund des letzten Abschaltens: 0 keiner, 1 entschärft, 2 NOT-AUS, 3 Verbindung verloren, 4 Überschlag, 5 Akku leer, 6 anderswo entschärft |
 | 28 | u32 | Laufzeit der Drohne in ms |
 | 32 | u32 | Sitzungs-Token (nur an den Piloten) |
+| 36, 37 | i8 | Trimmung Rollen, Nicken in 1/10° |
+| 38 | u16 | reserviert |
 
 ## Testen ohne Drohne
 
-- **Unit-Tests** für Protokoll, Failsafe, Verzögerungsschätzer, Wiederaufnahme
-  und DNS: `make -C components/webctrl/host_test`
+- **Unit-Tests** für Protokoll, Failsafe, Verzögerungsschätzer, Wiederaufnahme,
+  Trimmung, Akku-Schutz und DNS: `make -C components/webctrl/host_test`
 - **Simulierte Drohne** für die Seite:
   `python3 tools/mock_drone.py --stall-every 6 --stall-ms 450`, dann
   `http://127.0.0.1:8080/?host=127.0.0.1:8081` öffnen. Die Option erzeugt alle
-  6 s einen TCP-artigen Hänger von 450 ms.
+  6 s einen TCP-artigen Hänger von 450 ms. Mit `--vbat 3.45 --drain 0.02`
+  startet der simulierte Akku fast leer: Nach etwa 10 s Schweben beginnt die
+  Notlandung.
 
 ## Grenzen
 
@@ -159,7 +220,8 @@ Gerät, Grenzwerte, `resumed`). Telemetrie gibt es erst nach dem HELLO.
   „kein Internet“ eventuell über mobile Daten. Im Zweifel die Seite im
   normalen Browser unter `http://192.168.43.42` öffnen. Auf echten Geräten
   noch ungetestet.
-- **Sinken ohne Höhensensor** ist ungeregelt (geschätzter Schwebeschub).
+- **Sinken ohne Höhensensor** ist ungeregelt (geschätzter Schwebeschub), beim
+  Verbindungsverlust wie bei der Notlandung.
 - Das WLAN-Passwort ist standardmäßig `12345678`. Wer sich verbindet, kann
   zuschauen und NOT-AUS auslösen. Für den Einsatz unter Fremden
   `WIFI_PASSWORD` in `menuconfig` ändern.

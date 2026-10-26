@@ -1,4 +1,39 @@
 
+## Diese Fork: ESP-Drone mit Browser-Steuerung
+
+Dies ist eine **geänderte Fassung** von [espressif/esp-drone](https://github.com/espressif/esp-drone)
+(Stand `master@9d5a4f8` vom 26.10.2026). Änderungen ab 25.10.2026 von Philipp Weber
+([TechnikWeber](https://github.com/TechnikWeber)):
+
+- **Steuern im Browser:** Das Handy verbindet sich mit dem WLAN der Drohne, ein
+  Captive Portal öffnet die Steuerseite (WebSocket, Failsafe bei Verbindungsverlust).
+  Keine App nötig. Siehe [docs/webcontrol.md](docs/webcontrol.md).
+- **Neues Board: CHERGLOW E1 Mini**, ein Bausatz mit aufgestecktem ESP32-DevKit
+  und MPU6500 per SPI, der unter anderem als „ESP32 Drone Kit“ verkauft wird.
+  Siehe [docs/e1-mini.md](docs/e1-mini.md).
+- **Freischalten (Arming)** durch genau eine Quelle: Web-Pilot, App/cfclient/ESP-NOW
+  (Gas einmal auf null) oder `system.forceArm`. NOT-AUS von jedem verbundenen Handy.
+- Partitionstabelle mit zwei App-Bereichen und Core-Dump-Bereich.
+
+Alle Boards und ESP-IDF-Versionen des Originals bleiben unterstützt. Gebaut und
+geprüft mit ESP-IDF 5.5: E1 Mini und ESPlane (ESP32), ESP32-S2-Drone (S2 und S3),
+ESP32-P4 (ohne Web-Steuerung, der P4 hat kein eigenes WLAN). **Auf echter Hardware
+ist noch nichts getestet.** Auf dem ESP32-S2 ist der interne RAM knapp: Dort sind
+Core-Dump und die SPI-Interrupt-Routine im RAM abgeschaltet; ob der Heap für die
+Web-Steuerung reicht, muss ein Test zeigen.
+
+Lizenz unverändert: **GPL-3.0** (siehe [LICENSE](LICENSE)). Copyright der
+ursprünglichen Teile: Espressif Systems und Bitcraze AB.
+
+```bash
+. ~/esp/esp-idf-v5.5.6/export.sh
+idf.py set-target esp32       # E1 Mini; esp32s2/esp32s3 für die ESP32-S2-Drone,
+                              # Board wählen mit idf.py menuconfig
+idf.py build && idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+---
+
 ## ESP-Drone
 
 * [中文](./README_cn.md)

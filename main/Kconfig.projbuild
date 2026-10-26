@@ -81,6 +81,17 @@ menu "ESPDrone Config"
             default n if !ENABLE_POSITION_HOLD_MODE
             help
                 This enables assit mode when use old version app.
+        config CRTP_AUTO_ARM
+            bool "Arm motors when a CRTP pilot unlocks the throttle"
+            default y
+            help
+                The drone starts disarmed. With this option, a CRTP pilot (mobile
+                app, cfclient, ESP-NOW joystick) arms the motors by sending one
+                setpoint with zero thrust, as the original firmware expected. The
+                arm is released again when its setpoints stop for
+                COMMANDER_WDT_TIMEOUT_SHUTDOWN (2 s).
+                Without this option a CRTP pilot has to set the parameter
+                system.forceArm.
     endmenu
 
     menu "wireless config"

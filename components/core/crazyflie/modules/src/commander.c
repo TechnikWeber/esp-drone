@@ -30,6 +30,7 @@
 #include "queue.h"
 
 #include "commander.h"
+#include "system.h"
 #include "crtp_commander.h"
 #include "crtp_commander_high_level.h"
 
@@ -108,6 +109,10 @@ void commanderGetSetpoint(setpoint_t *setpoint, const state_t *state)
   uint32_t currentTime = xTaskGetTickCount();
 
   if ((currentTime - setpoint->timestamp) > COMMANDER_WDT_TIMEOUT_SHUTDOWN) {
+#ifdef CONFIG_CRTP_AUTO_ARM
+    // No setpoints from anyone for 2 s: a CRTP pilot is gone, drop its arm.
+    systemReleaseArm(ARM_SOURCE_CRTP);
+#endif
     if (enableHighLevel) {
       crtpCommanderHighLevelGetSetpoint(setpoint, state);
     }

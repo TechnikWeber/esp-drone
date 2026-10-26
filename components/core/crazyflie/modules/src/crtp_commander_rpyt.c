@@ -29,6 +29,7 @@
 
 #include "crtp_commander.h"
 #include "commander.h"
+#include "system.h"
 #include "estimator.h"
 #include "crtp.h"
 #include "param.h"
@@ -168,6 +169,11 @@ void crtpCommanderRpytDecodeSetpoint(setpoint_t *setpoint, CRTPPacket *pk)
   }
   if (values->thrust == 0) {
     thrustLocked = false;
+#ifdef CONFIG_CRTP_AUTO_ARM
+    // Throttle-down gesture of the app/cfclient/ESP-NOW pilot arms the
+    // motors, unless another pilot source (web control) holds the arm.
+    systemRequestArm(ARM_SOURCE_CRTP);
+#endif
   }
 
   // Thrust

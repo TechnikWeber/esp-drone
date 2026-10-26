@@ -78,6 +78,9 @@ static bool canFly;
 /* Motors must remain inhibited until an explicit runtime arm command. */
 static bool armed = false;
 static bool forceArm;
+static armSource_t armOwner = ARM_SOURCE_NONE;
+static portMUX_TYPE armLock = portMUX_INITIALIZER_UNLOCKED;
+static bool started = false;
 static bool isInit;
 
 STATIC_MEM_TASK_ALLOC(systemTask, SYSTEM_TASK_STACKSIZE);
@@ -299,6 +302,7 @@ void systemTask(void *arg)
 /* Global system variables */
 void systemStart()
 {
+  started = true;
   xSemaphoreGive(canStartMutex);
 #ifndef DEBUG_EP2
   //watchdogInit();
@@ -328,7 +332,59 @@ bool systemCanFly(void)
 
 void systemSetArmed(bool val)
 {
-  armed = val;
+  if (val) {
+    systemRequestArm(ARM_SOURCE_LEGACY);
+  } else {
+    systemReleaseArm(ARM_SOURCE_LEGACY);
+  }
+}
+
+bool systemRequestArm(armSource_t source)
+{
+  bool ok;
+
+  if (source == ARM_SOURCE_NONE) {
+    return false;
+  }
+
+  taskENTER_CRITICAL(&armLock);
+  ok = (armOwner == ARM_SOURCE_NONE || armOwner == source);
+  if (ok) {
+    armOwner = source;
+    armed = true;
+  }
+  taskEXIT_CRITICAL(&armLock);
+
+  return ok;
+}
+
+void systemReleaseArm(armSource_t source)
+{
+  taskENTER_CRITICAL(&armLock);
+  if (armOwner == source) {
+    armOwner = ARM_SOURCE_NONE;
+    armed = false;
+  }
+  taskEXIT_CRITICAL(&armLock);
+}
+
+armSource_t systemGetArmOwner(void)
+{
+  return armOwner;
+}
+
+void systemForceDisarm(void)
+{
+  taskENTER_CRITICAL(&armLock);
+  armOwner = ARM_SOURCE_NONE;
+  armed = false;
+  forceArm = false;
+  taskEXIT_CRITICAL(&armLock);
+}
+
+bool systemIsStarted(void)
+{
+  return started;
 }
 
 bool systemIsArmed()
@@ -372,4 +428,5 @@ PARAM_GROUP_STOP(sytem)
 LOG_GROUP_START(sys)
 LOG_ADD(LOG_INT8, canfly, &canFly)
 LOG_ADD(LOG_INT8, armed, &armed)
+LOG_ADD(LOG_UINT8, armOwner, &armOwner)
 LOG_GROUP_STOP(sys)

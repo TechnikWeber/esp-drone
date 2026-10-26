@@ -43,4 +43,28 @@ bool systemCanFly(void);
 void systemSetArmed(bool val);
 bool systemIsArmed();
 
+/* True once the self test passed and the system was started. */
+bool systemIsStarted(void);
+
+/*
+ * Arming. The drone starts disarmed; the motors only run while exactly one
+ * pilot source holds the arm (or the parameter system.forceArm is set).
+ * A second source cannot arm while another one holds it.
+ */
+typedef enum {
+  ARM_SOURCE_NONE = 0,
+  ARM_SOURCE_LEGACY,   // systemSetArmed()
+  ARM_SOURCE_CRTP,     // mobile app, cfclient, ESP-NOW (CONFIG_CRTP_AUTO_ARM)
+  ARM_SOURCE_WEB,      // browser control (webctrl)
+} armSource_t;
+
+/* Arm for this source. Returns false if another source holds the arm. */
+bool systemRequestArm(armSource_t source);
+/* Release the arm if this source holds it. */
+void systemReleaseArm(armSource_t source);
+/* Source currently holding the arm, ARM_SOURCE_NONE if disarmed. */
+armSource_t systemGetArmOwner(void);
+/* Emergency stop: disarm whoever holds the arm, clear system.forceArm. */
+void systemForceDisarm(void);
+
 #endif //__SYSTEM_H__

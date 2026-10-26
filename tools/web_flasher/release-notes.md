@@ -21,13 +21,16 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 write_flash 0x0 espdro
 ```
 
 Back up the factory firmware first if you want to go back (`read_flash 0 ALL`, see the guide).
+From the box to the first hover:
+[docs/getting-started.md](https://github.com/{{REPO}}/blob/webcontrol/docs/getting-started.md).
 
 ## What's in it
 
 - Browser control over the drone's Wi-Fi with a captive portal: WebSocket, only the newest
   command counts, late commands are dropped, staged failsafe (hold, level out, descend, off).
 - Battery protection: forced landing below 3.0 V, no arming below 3.4 V.
-- Roll and pitch trim, stored on the drone. Control page in English and German.
+- Roll and pitch trim, stored on the drone, and one-tap levelling on the ground.
+  Control page in English and German.
 - Board support for the E1 Mini (ESP32 DevKit, MPU6500 on SPI, 8520 motors) with controller
   gains from the vendor firmware.
 - Based on espressif/esp-drone `master@9d5a4f8`, built with ESP-IDF 5.5.

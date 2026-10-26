@@ -1,227 +1,231 @@
-# Browser-Steuerung (Captive Portal + WebSocket)
+# Browser control (captive portal + WebSocket)
 
-Ein Handy verbindet sich mit dem WLAN der Drohne, das Captive-Portal-Fenster
-öffnet sich von selbst und zeigt die Steuerseite. Die Seite schickt
-Steuerbefehle über einen WebSocket (TCP) und bekommt Telemetrie zurück. Es
-braucht keine App.
+A phone joins the drone's Wi-Fi, the captive portal window opens by itself and
+shows the control page. The page sends commands over a WebSocket (TCP) and gets
+telemetry back. No app is needed.
 
-Code: `components/webctrl/` · Seite: `components/webctrl/web/index.html` ·
-Einstellungen: `idf.py menuconfig` → *ESPDrone web control*. Verfügbar auf allen
-Boards mit eigenem WLAN (Transport „native Wi-Fi“), also nicht auf dem ESP32-P4.
+![Control page while flying](images/webcontrol-flying.png)
 
-## Aufbau
+Code: `components/webctrl/` · page: `components/webctrl/web/index.html` ·
+settings: `idf.py menuconfig` → *ESPDrone web control*. Available on all boards
+with their own Wi-Fi (transport "native Wi-Fi"), so not on the ESP32-P4.
+
+The page is in English, or in German on German phones; the button at the top
+right switches the language. It translates itself because the captive portal
+window has no translate function.
+
+## Structure
 
 ```
-Handy (Browser)                         Drohne (ESP32)
+Phone (browser)                         Drone (ESP32)
 ───────────────                         ─────────────────────────────────────────
-DNS: jede Anfrage  ───── UDP 53 ─────▶  Captive-DNS: alles → 192.168.43.42
-Portal-Prüfung     ───── HTTP :80 ───▶  Portal-Server: unbekannte URLs → 302 auf /
-Steuerseite (9 KB) ◀──── HTTP :80 ────  index.html (gzip, in der Firmware)
-Steuerbefehle 50 Hz ──── WS :81 ─────▶  Control-Server ─▶ webctrl_core (Failsafe)
-Telemetrie 20 Hz   ◀──── WS :81 ──────                    └▶ Commander (Prio WEB)
+DNS: every query   ───── UDP 53 ─────▶  captive DNS: everything → 192.168.43.42
+portal check       ───── HTTP :80 ───▶  portal server: unknown URLs → 302 to /
+control page (12 KB) ◀── HTTP :80 ────  index.html (gzip, in the firmware)
+commands 50 Hz     ───── WS :81 ─────▶  control server ─▶ webctrl_core (failsafe)
+telemetry 20 Hz    ◀──── WS :81 ──────                    └▶ commander (priority WEB)
 ```
 
-- **Getrennte Server:** Port 80 bedient Captive-Portal-Prüfungen und lädt die
-  Seite aus, Port 81 nur die Steuerung. Jeder Server hat einen eigenen Task, so
-  kann ein langsamer Seitenabruf eines zweiten Handys die Befehle des Piloten
-  nicht aufhalten.
-- **CPU-Kerne:** WLAN, lwIP und beide Server laufen auf Kern 0, Sensor- und
-  Regel-Task auf Kern 1.
-- **Captive Portal:** DNS antwortet jede A-Anfrage mit der Drohnen-IP (AAAA
-  leer), HTTP leitet alle unbekannten Adressen und fremden Host-Namen auf
-  `http://192.168.43.42/` um. Das löst die Portal-Erkennung von Android, iOS
-  und Windows aus. Zusätzlich setzt der DHCP-Server Option 114 (RFC 8910) mit
-  der API-Adresse `/captive-portal/api` (RFC 8908).
-- Die Seite läuft auch im normalen Browser unter `http://192.168.43.42`.
+- **Separate servers:** port 80 answers captive portal checks and serves the
+  page, port 81 carries only the control channel. Each server has its own task,
+  so a slow page download on a second phone cannot hold up the pilot's
+  commands.
+- **CPU cores:** Wi-Fi, lwIP and both servers run on core 0, the sensor and
+  stabilizer tasks on core 1.
+- **Captive portal:** DNS answers every A query with the drone's address (AAAA
+  empty), HTTP redirects all unknown addresses and foreign host names to
+  `http://192.168.43.42/`. This triggers the portal detection of Android, iOS
+  and Windows. The DHCP server also sets option 114 (RFC 8910) with the API
+  address `/captive-portal/api` (RFC 8908).
+- The page also works in a normal browser at `http://192.168.43.42`.
 
-## Umgang mit Paketverlust und Verzögerung
+## Packet loss and delay
 
-Über TCP geht kein Befehl verloren, er kommt aber womöglich zu spät. Nach einer
-Neuübertragung trifft ein Schwall alter Befehle auf einmal ein. Dagegen:
+Over TCP no command gets lost, but it may arrive too late. After a
+retransmission a burst of old commands arrives at once. What helps:
 
-1. **Jeder Befehl enthält den kompletten Steuerzustand**, keine Änderungen.
-   Ein fehlender oder verworfener Befehl schadet nicht.
-2. **Nur der neueste zählt.** Die Seite sendet nur, wenn ihr Sendepuffer leer
-   ist (`bufferedAmount == 0`), statt Befehle anzustauen. Die Drohne übernimmt
-   Befehle in Sequenz-Reihenfolge und verwirft ältere.
-3. **Verspätete Befehle werden verworfen.** Ohne gemeinsame Uhr vergleicht die
-   Drohne `Ankunftszeit − Sendezeit` mit dem kleinsten Wert der letzten
-   Sekunden. Liegt ein Befehl mehr als 250 ms darüber, wird er verworfen.
-4. **Failsafe in Stufen**, gemessen am Alter des letzten frischen Befehls:
+1. **Every command carries the complete control state**, no deltas. A missing
+   or dropped command does no harm.
+2. **Only the newest counts.** The page sends only when its send buffer is empty
+   (`bufferedAmount == 0`) instead of queueing commands. The drone accepts
+   commands in sequence order and drops older ones.
+3. **Late commands are dropped.** Without a shared clock, the drone compares
+   `arrival time − send time` with the smallest value of the last seconds. A
+   command more than 250 ms above it is dropped.
+4. **Failsafe in stages**, based on the age of the last fresh command:
 
-   | Alter | Stufe | Verhalten |
+   | Age | Stage | Behaviour |
    |---|---|---|
-   | < 100 ms | OK | Befehl wird ausgeführt |
-   | 100–300 ms | Halten | letzter Befehl wird gehalten |
-   | 300 ms–1 s | Ausrichten | Rollen/Nicken 0, keine Drehung, Schub höchstens Schwebeschub |
-   | 1–4 s | Sinken | Schub 85 % des Schwebeschubs |
-   | ≥ 4 s | Aus | Motoren aus, entschärft |
+   | < 100 ms | OK | the command is executed |
+   | 100–300 ms | hold | the last command is held |
+   | 300 ms–1 s | level out | roll/pitch 0 (or the trim), no turning, thrust at most the hover thrust |
+   | 1–4 s | descend | thrust 85 % of the hover thrust |
+   | ≥ 4 s | off | motors off, disarmed |
 
-   Den **Schwebeschub** lernt die Drohne im Flug: Tiefpass über den Schub, solange
-   Befehle frisch sind; gültig nach 2 s Flugzeit. Ohne Höhensensor ist das
-   Sinken ungeregelt, wie der „Land“-Failsafe von Betaflight.
-5. **Sofort reagieren:** Wird der WebSocket geschlossen, verlässt das Handy das
-   WLAN oder geht die Seite in den Hintergrund (`PAUSE`), springt die Drohne
-   direkt auf „Ausrichten“. Die Zeitlinie zählt weiter ab dem letzten frischen
-   Befehl.
-6. **Rückkanal:** Die Telemetrie spiegelt Sequenznummer und Sendezeit des
-   letzten übernommenen Befehls; die Seite zeigt daraus die Latenz. Kommt
-   600 ms keine Telemetrie, warnt sie; nach 2,5 s baut sie die Verbindung neu
-   auf.
-7. **Wiederaufnahme:** Nach einem Verbindungsabbruch, auch nach einem
-   Neuladen der Seite, meldet sich die Seite mit ihrem Sitzungs-Token. Die
-   Drohne gibt ihr die Steuerung zurück, ohne neu scharfzuschalten. Den
-   Gasstand stellt die Seite erst wieder her, wenn die Drohne die Wiederaufnahme
-   bestätigt hat.
+   The drone learns the **hover thrust** in flight: a low pass over the thrust
+   while commands are fresh, valid after 2 s of flight. Without an altitude
+   sensor the descent is open loop, like the "Land" failsafe of Betaflight.
+5. **React at once:** if the WebSocket closes, the phone leaves the Wi-Fi or the
+   page goes to the background (`PAUSE`), the drone jumps straight to "level
+   out". The timeline keeps counting from the last fresh command.
+6. **Back channel:** the telemetry echoes the sequence number and send time of
+   the last accepted command; the page shows the round trip time from it. After
+   600 ms without telemetry it warns, after 2.5 s it reconnects.
+7. **Resume:** after a dropped connection, also after reloading the page, the
+   page comes back with its session token. The drone hands control back without
+   arming again. The page restores the throttle only after the drone has
+   confirmed the resume.
 
-Alle Zeiten sind in `menuconfig` einstellbar.
+![Link lost: the drone descends by itself](images/webcontrol-failsafe.png)
 
-## Akku-Schutz
+All times can be set in `menuconfig`.
 
-Die Drohne glättet die Akkuspannung (Zeitkonstante 0,5 s), weil sie mit dem Gas
-springt. Dann gilt:
+## Battery protection
 
-| Lage | Verhalten |
+The drone smooths the battery voltage (time constant 0.5 s), because it jumps
+with the throttle. Then:
+
+| Situation | Behaviour |
 |---|---|
-| am Boden unter 3,4 V | Scharfschalten gesperrt, die Seite zeigt „Akku leer – bitte laden“ |
-| im Flug 1 s lang unter 3,0 V | **Notlandung:** Du lenkst weiter, aber der Schub ist begrenzt. Die Grenze beginnt beim Schwebeschub und sinkt in 10 s auf null, dann ist die Drohne entschärft. Gas ganz runter beendet die Landung sofort. |
-| scharf am Boden 1 s lang unter 3,0 V | sofort entschärft |
+| on the ground below 3.4 V | arming is blocked, the page shows "Battery empty – please charge" |
+| in flight below 3.0 V for 1 s | **forced landing:** you keep steering, but the thrust is limited. The limit starts at the hover thrust and goes down to zero within 10 s, then the drone disarms. Throttle all the way down ends the landing at once. |
+| armed on the ground below 3.0 V for 1 s | disarmed at once |
 
-Zusätzlich meldet ESP-Drone „Akku schwach“, wenn die Spannung 5 s unter 3,2 V
-liegt. Das ist bei App und cfclient der einzige Akku-Schutz; Notlandung und
-Startsperre gibt es nur mit der Web-Steuerung. Unter 0,5 V (kein Akku, nur USB)
-entfallen die Prüfungen. Einstellbar in
-`menuconfig` → *ESPDrone web control* → *Battery protection*. Die Werte gelten
-für einen 1S-LiPo; die angezeigte Spannung vorher mit einem Multimeter
-vergleichen.
+ESP-Drone also reports "battery low" when the voltage stays below 3.2 V for
+5 s. With the app or cfclient that is the only battery protection; forced
+landing and the arming block exist only with web control. Below 0.5 V (no
+battery, USB only) the checks are off. Settings in `menuconfig` → *ESPDrone web
+control* → *Battery protection*. The values are for a 1S LiPo; compare the
+displayed voltage with a multimeter first.
 
-Wie beim Verbindungsverlust ist auch die Notlandung ohne Höhensensor ungeregelt.
-Aus 1–2 m Höhe setzt die Drohne nach etwa 2 s mit 1,5–2,5 m/s auf.
+As with a lost link, the forced landing is open loop without an altitude sensor.
+From 1–2 m the drone touches down after about 2 s at 1.5–2.5 m/s.
 
-## Trimmen
+![Forced landing with an empty battery](images/webcontrol-battery.png)
 
-Driftet die Drohne beim Schweben von allein zur Seite, gleicht die Trimmung das
-aus: „Trimm“ in der Leiste antippen, dann mit den Pfeilen in Schritten von 0,5°
-gegensteuern, höchstens ±5°. Driftet sie nach rechts, ◀ tippen. Ein langer Druck
-auf die Mitte setzt auf 0.
+## Trim
 
-- Die Trimmung wird zu Rollen und Nicken addiert; die Summe bleibt innerhalb
-  des maximalen Winkels. Im Failsafe richtet sich die Drohne auf die Trimmung
-  aus statt auf 0°.
-- Die **Drohne** speichert die Werte im NVS, nicht das Handy. Sie gehören zur
-  Drohne, und das Portal-Fenster auf iPhones vergisst seinen Speicher.
-  Geschrieben wird erst, wenn niemand scharf ist, weil Flash-Schreiben den
-  Flugregler kurz anhält.
-- Am Boden darf jedes Handy trimmen, im Flug nur der Pilot.
-- Die Trimmung gilt nur für die Web-Steuerung, nicht für App oder cfclient.
+If the drone drifts sideways by itself while hovering, the trim corrects it: tap
+"Trim" in the top bar, then counter-steer with the arrows in 0.5° steps, up to
+±5°. If it drifts to the right, tap ◀. A long press on the middle resets to 0.
 
-## Scharfschalten und Piloten
+- The trim is added to roll and pitch; the sum stays within the maximum angle.
+  In the failsafe the drone levels out to the trim instead of 0°.
+- The **drone** stores the values in NVS, not the phone: they belong to the
+  drone, and the portal window on iPhones forgets its storage. They are written
+  only while nobody is armed, because writing the flash stalls the flight
+  controller briefly.
+- On the ground every phone may trim, in flight only the pilot.
+- The trim applies to web control only, not to the app or cfclient.
 
-- Die Drohne startet **gesperrt**. Scharf schaltet immer nur eine Quelle:
-  Web-Pilot, CRTP-Pilot (App, cfclient, ESP-NOW-Joystick) oder `system.forceArm`.
-- Web: Gas ganz unten, „Scharfschalten“ 1 s halten. Vorher müssen der
-  Selbsttest bestanden und die Sensoren kalibriert sein, der Akku darf nicht
-  leer sein und die Drohne nicht auf dem Kopf liegen.
-- Nach NOT-AUS oder Failsafe muss die Seite ARM erst einmal loslassen, bevor neu
-  geschärft werden kann. Das gilt auch für jede neue Verbindung.
-- **NOT-AUS** darf jedes verbundene Handy auslösen. Er entschärft jeden
-  Piloten, auch App oder cfclient.
-- Weitere Handys sehen die Telemetrie, steuern aber nicht.
-- Schaltet die Drohne ab, zeigt die Seite den Grund: NOT-AUS, Verbindung
-  verloren, Überschlag oder Akku leer.
+![Trim panel](images/webcontrol-trim.png)
 
-## Protokoll
+## Arming and pilots
 
-Binäre WebSocket-Frames, Little Endian. Definiert in
-`components/webctrl/include/webctrl_core.h`. Version 2: TRIM-Nachricht,
-Telemetrie mit 40 statt 36 Bytes (Akku-Zustand, Abschaltgrund, Trimmung).
+- The drone starts **disarmed**. Only one source arms at a time: the web pilot,
+  a CRTP pilot (app, cfclient, ESP-NOW joystick) or `system.forceArm`.
+- Web: throttle all the way down, hold "Arm" for 1 s. The self test must have
+  passed and the sensors must be calibrated, the battery must not be empty and
+  the drone must not be upside down.
+- After STOP or a failsafe, the page has to release ARM once before it can arm
+  again. The same applies to every new connection.
+- **STOP** can be triggered from every connected phone. It disarms every pilot,
+  including the app or cfclient.
+- Further phones see the telemetry but do not control.
+- When the drone stops, the page shows why: STOP, link lost, upside down or
+  battery empty.
 
-### CONTROL (Seite → Drohne, 16 Bytes, 50 Hz)
+## Protocol
 
-| Offset | Typ | Feld |
+Binary WebSocket frames, little endian. Defined in
+`components/webctrl/include/webctrl_core.h`. Version 2: TRIM message, telemetry
+with 40 instead of 36 bytes (battery state, stop reason, trim).
+
+### CONTROL (page → drone, 16 bytes, 50 Hz)
+
+| Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x01` |
-| 1 | u8 | Flags: bit0 ARM, bit1 KILL, bit2 PAUSE |
-| 2 | u16 | Sequenznummer (läuft über) |
-| 4 | u32 | Sendezeit der Seite in ms (`performance.now()`) |
-| 8 | i16 | Rollen −1000…1000 (+ = rechts) |
-| 10 | i16 | Nicken −1000…1000 (+ = vorwärts) |
-| 12 | i16 | Gieren −1000…1000 (+ = rechts drehen) |
-| 14 | u16 | Gas 0…1000 |
+| 1 | u8 | flags: bit0 ARM, bit1 KILL, bit2 PAUSE |
+| 2 | u16 | sequence number (wraps) |
+| 4 | u32 | send time of the page in ms (`performance.now()`) |
+| 8 | i16 | roll −1000…1000 (+ = right) |
+| 10 | i16 | pitch −1000…1000 (+ = forward) |
+| 12 | i16 | yaw −1000…1000 (+ = turn right) |
+| 14 | u16 | throttle 0…1000 |
 
-Ausschläge werden auf ±15° bzw. ±120 °/s abgebildet (einstellbar). Ungültige
-Frames (Länge, Typ, Wertebereich, unbekannte Flags) werden ignoriert.
+Full stick maps to ±15° and ±120 °/s (configurable). Invalid frames (length,
+type, value range, unknown flags) are ignored.
 
-### HELLO (Seite → Drohne, 8 Bytes, direkt nach dem Verbinden)
+### HELLO (page → drone, 8 bytes, right after connecting)
 
-| Offset | Typ | Feld |
+| Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x02` |
-| 1 | u8 | Protokollversion (2) |
-| 4 | u32 | Sitzungs-Token, 0 = neue Sitzung |
+| 1 | u8 | protocol version (2) |
+| 4 | u32 | session token, 0 = new session |
 
-Die Drohne antwortet mit einem Text-Frame `{"t":"info", …}` (Firmware,
-Gerät, Grenzwerte, Failsafe-Zeiten, Akku-Grenzen `battery`, `trimMax`,
-`resumed`). Telemetrie gibt es erst nach dem HELLO.
+The drone answers with a text frame `{"t":"info", …}` (firmware, device,
+limits, failsafe times, battery limits `battery`, `trimMax`, `resumed`).
+Telemetry starts only after the HELLO.
 
-### TRIM (Seite → Drohne, 4 Bytes, bei jeder Änderung)
+### TRIM (page → drone, 4 bytes, on every change)
 
-| Offset | Typ | Feld |
+| Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x03` |
-| 1 | i8 | Rollen-Trimmung in 1/10° (+ = rechts), −50…50 |
-| 2 | i8 | Nick-Trimmung in 1/10° (+ = vorwärts), −50…50 |
-| 3 | u8 | reserviert (0) |
+| 1 | i8 | roll trim in 1/10° (+ = right), −50…50 |
+| 2 | i8 | pitch trim in 1/10° (+ = forward), −50…50 |
+| 3 | u8 | reserved (0) |
 
-Absolute Werte. Die Drohne übernimmt sie am Boden von jedem Handy, im Flug nur
-vom Piloten, und meldet die gültigen Werte in der Telemetrie zurück.
+Absolute values. On the ground the drone takes them from every phone, in flight
+only from the pilot, and reports the valid values back in the telemetry.
 
-### TELEMETRY (Drohne → Seite, 40 Bytes, 20 Hz)
+### TELEMETRY (drone → page, 40 bytes, 20 Hz)
 
-| Offset | Typ | Feld |
+| Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x81` |
-| 1 | u8 | Status: bit0 scharf, bit1 du bist Pilot, bit2 andere Steuerung, bit3 Failsafe, bit4 Akku schwach, bit5 ARM erst loslassen, bit6 bereit, bit7 auf dem Kopf |
-| 2 | u8 | Failsafe-Stufe 0…4 |
-| 3 | u8 | Ergebnis des letzten Scharfschalt-Versuchs |
-| 4 | u16 | Sequenznummer des letzten übernommenen Befehls |
-| 6 | u16 | übernommene Befehle pro Sekunde |
-| 8 | u32 | Sendezeit dieses Befehls (Echo → Latenz) |
-| 12 | u16 | Akkuspannung in mV |
-| 14, 16, 18 | i16 | Rollen, Nicken, Gieren in 1/100° (Nicken + = Nase hoch) |
-| 20 | u16 | Schub an den Regler 0…1000 |
-| 22 | u16 | verworfene verspätete Befehle |
-| 24 | u16 | Zusatzverzögerung des letzten Befehls in ms |
-| 26 | u8 | Status 2: bit0 Notlandung (Akku leer), bit1 Akku zu schwach zum Scharfschalten (nur am Boden) |
-| 27 | u8 | Grund des letzten Abschaltens: 0 keiner, 1 entschärft, 2 NOT-AUS, 3 Verbindung verloren, 4 Überschlag, 5 Akku leer, 6 anderswo entschärft |
-| 28 | u32 | Laufzeit der Drohne in ms |
-| 32 | u32 | Sitzungs-Token (nur an den Piloten) |
-| 36, 37 | i8 | Trimmung Rollen, Nicken in 1/10° |
-| 38 | u16 | reserviert |
+| 1 | u8 | state: bit0 armed, bit1 you are the pilot, bit2 other controller, bit3 failsafe, bit4 battery low, bit5 release ARM first, bit6 ready, bit7 upside down |
+| 2 | u8 | failsafe stage 0…4 |
+| 3 | u8 | result of the last arming attempt |
+| 4 | u16 | sequence number of the last accepted command |
+| 6 | u16 | accepted commands per second |
+| 8 | u32 | send time of that command (echo → round trip time) |
+| 12 | u16 | battery voltage in mV |
+| 14, 16, 18 | i16 | roll, pitch, yaw in 1/100° (pitch + = nose up) |
+| 20 | u16 | thrust sent to the controller 0…1000 |
+| 22 | u16 | dropped late commands |
+| 24 | u16 | extra delay of the last command in ms |
+| 26 | u8 | state 2: bit0 forced landing (battery empty), bit1 battery too low to arm (only on the ground) |
+| 27 | u8 | reason of the last stop: 0 none, 1 disarmed, 2 STOP, 3 link lost, 4 upside down, 5 battery empty, 6 disarmed elsewhere |
+| 28 | u32 | uptime of the drone in ms |
+| 32 | u32 | session token (to the pilot only) |
+| 36, 37 | i8 | roll and pitch trim in 1/10° |
+| 38 | u16 | reserved |
 
-## Testen ohne Drohne
+## Testing without a drone
 
-- **Unit-Tests** für Protokoll, Failsafe, Verzögerungsschätzer, Wiederaufnahme,
-  Trimmung, Akku-Schutz und DNS: `make -C components/webctrl/host_test`
-- **Simulierte Drohne** für die Seite:
-  `python3 tools/mock_drone.py --stall-every 6 --stall-ms 450`, dann
-  `http://127.0.0.1:8080/?host=127.0.0.1:8081` öffnen. Die Option erzeugt alle
-  6 s einen TCP-artigen Hänger von 450 ms. Mit `--vbat 3.45 --drain 0.02`
-  startet der simulierte Akku fast leer: Nach etwa 10 s Schweben beginnt die
-  Notlandung.
+- **Unit tests** for the protocol, failsafe, delay estimator, resume, trim,
+  battery protection and DNS: `make -C components/webctrl/host_test`
+- **Simulated drone** for the page:
+  `python3 tools/mock_drone.py --stall-every 6 --stall-ms 450`, then open
+  `http://127.0.0.1:8080/?host=127.0.0.1:8081`. The option creates a TCP-like
+  stall of 450 ms every 6 s. With `--vbat 3.45 --drain 0.02` the simulated
+  battery starts nearly empty: after about 10 s of hovering the forced landing
+  begins. `&lang=de` or `&lang=en` in the address picks the language.
 
-## Grenzen
+## Limits
 
-- **Nur HTTP**, ein gültiges HTTPS-Zertifikat ist im Drohnen-WLAN nicht
-  möglich. Steuern durch Kippen des Handys, die Gamepad-API und die Wake-Lock-API
-  brauchen HTTPS und fehlen deshalb.
-- **Portal-Fenster:** iOS und Android öffnen die Seite in einem Mini-Browser.
-  Bei iOS kann „Abbrechen“ das WLAN trennen; Android leitet normale Apps bei
-  „kein Internet“ eventuell über mobile Daten. Im Zweifel die Seite im
-  normalen Browser unter `http://192.168.43.42` öffnen. Auf echten Geräten
-  noch ungetestet.
-- **Sinken ohne Höhensensor** ist ungeregelt (geschätzter Schwebeschub), beim
-  Verbindungsverlust wie bei der Notlandung.
-- Das WLAN-Passwort ist standardmäßig `12345678`. Wer sich verbindet, kann
-  zuschauen und NOT-AUS auslösen. Für den Einsatz unter Fremden
-  `WIFI_PASSWORD` in `menuconfig` ändern.
+- **HTTP only**; a valid HTTPS certificate is not possible in the drone's
+  Wi-Fi. Steering by tilting the phone, the Gamepad API and the Wake Lock API
+  need HTTPS and are therefore missing.
+- **Portal window:** iOS and Android open the page in a mini browser. On iOS
+  "Cancel" may disconnect the Wi-Fi; Android may route normal apps over mobile
+  data when there is "no internet". If in doubt, open the page in the normal
+  browser at `http://192.168.43.42`. Not yet tested on real devices.
+- **Descending without an altitude sensor** is open loop (estimated hover
+  thrust), both after a lost link and in a forced landing.
+- The Wi-Fi password is `12345678` by default. Anyone who joins can watch and
+  trigger STOP. Before flying among strangers, change `WIFI_PASSWORD` in
+  `menuconfig`.

@@ -1,83 +1,81 @@
-# ESP-Drone auf dem CHERGLOW E1 Mini
+# ESP-Drone on the CHERGLOW E1 Mini
 
-Diese Firmware-Variante läuft auf dem Bausatz **CHERGLOW (琛光) E1 Mini**
-(Open-Hardware-Projekt: <https://oshwhub.com/songge8/project_qqqyfdkm>), der unter
-anderem als „ESP32 Drone Kit“ verkauft wird. Ab Werk läuft darauf die
-Arduino-Firmware *CF-Drone* ([songge8/CF-Drone](https://github.com/songge8/CF-Drone)),
-bei manchen Händlern umbenannt in „XW-Drone“. Diese Anleitung beschreibt, wie
-ESP-Drone an die Hardware angepasst wurde, wie man flasht und wie man vor dem
-ersten Flug am Prüfstand testet.
+This firmware variant runs on the **CHERGLOW (琛光) E1 Mini** kit (open hardware
+project: <https://oshwhub.com/songge8/project_qqqyfdkm>), which is sold among
+others as "ESP32 Drone Kit". It ships with the Arduino firmware *CF-Drone*
+([songge8/CF-Drone](https://github.com/songge8/CF-Drone)), which some sellers
+rename to "XW-Drone". This guide describes how ESP-Drone was adapted to the
+hardware, how to flash it and how to test on the bench before the first flight.
 
-> **Stand:** portiert anhand der Herstellerunterlagen, noch **nicht auf echter
-> Hardware getestet**. Die Prüfstand-Checkliste unten ist deshalb Pflicht.
+> **Status:** ported from the vendor's documents, **not tested on real hardware
+> yet**. The bench checklist below is therefore mandatory.
 
 ## Hardware
 
-| Funktion | Anschluss | Quelle |
+| Function | Connection | Source |
 |---|---|---|
-| Controller | ESP32-DevKit V1, 30 Pins, klassischer ESP32 (kein S3) | Projektseite, Fotos |
-| Lagesensor | MPU6500 per SPI: SCK GPIO18, MISO GPIO19 (Modul-Pin AD0), MOSI GPIO23 (SDA), CS GPIO5 (NCS), **kein Interrupt** | CF-Drone `board_config.h`, `imu.ino` |
-| Motor M1 vorne rechts | GPIO15 | CF-Drone `BOARD_MOTOR_PINS` |
-| Motor M2 hinten rechts | GPIO13 | |
-| Motor M3 hinten links | GPIO12 | |
-| Motor M4 vorne links | GPIO14 | |
-| Motortreiber | AO3416-MOSFETs, 25 kHz PWM | Stückliste, CF-Drone `motors.ino` |
-| Akkuspannung | GPIO36, Teiler 10 kΩ / 33 kΩ → Vbat = Vadc × 1,303 | CF-Drone `battery.ino` |
-| Status-LED | GPIO2 (blaue LED des DevKits) | CF-Drone |
-| Erweiterung | I2C SDA 21 / SCL 22, PMW3901-CS GPIO33, VL53L1X-XSHUT GPIO32 | CF-Drone |
-| Buzzer | keiner | |
+| Controller | ESP32 DevKit V1, 30 pins, classic ESP32 (no S3) | project page, photos |
+| IMU | MPU6500 on SPI: SCK GPIO18, MISO GPIO19 (module pin AD0), MOSI GPIO23 (SDA), CS GPIO5 (NCS), **no interrupt** | CF-Drone `board_config.h`, `imu.ino` |
+| Motor M1 front right | GPIO15 | CF-Drone `BOARD_MOTOR_PINS` |
+| Motor M2 rear right | GPIO13 | |
+| Motor M3 rear left | GPIO12 | |
+| Motor M4 front left | GPIO14 | |
+| Motor drivers | AO3416 MOSFETs, 25 kHz PWM | parts list, CF-Drone `motors.ino` |
+| Battery voltage | GPIO36, divider 10 kΩ / 33 kΩ → Vbat = Vadc × 1.303 | CF-Drone `battery.ino` |
+| Status LED | GPIO2 (blue LED of the DevKit) | CF-Drone |
+| Expansion | I2C SDA 21 / SCL 22, PMW3901 CS GPIO33, VL53L1X XSHUT GPIO32 | CF-Drone |
+| Buzzer | none | |
 
-Die Pin-Nummern sind Fakten aus den Herstellerdateien; aus dem CF-Drone-Code
-wurde nichts übernommen.
+The pin numbers are facts taken from the vendor's files; no CF-Drone code was
+copied.
 
-### Einbaulage des Lagesensors
+### IMU orientation
 
-ESP-Drone rechnet im Körpersystem der Crazyflie: X nach vorn, Y nach links,
-Z nach oben. Die Werks-Firmware stellt `imuRotation = (0, 0, −90°)` ein und
-beschreibt die Einbaulage im Kommentar dazu (`imu.ino`) ausdrücklich: Chip oben,
-Sensor-X zeigt nach rechts, Sensor-Y nach vorn, umgerechnet `(y, −x, z)`. Also:
+ESP-Drone works in the Crazyflie body frame: X forward, Y left, Z up. The vendor
+firmware sets `imuRotation = (0, 0, −90°)` and states the mounting in the
+comment next to it (`imu.ino`): chip on top, sensor X points right, sensor Y
+points forward, converted as `(y, −x, z)`. So:
 
-- Sensor-Y zeigt nach vorn → Körper-X = Sensor-Y
-- Sensor-X zeigt nach rechts → Körper-Y = −Sensor-X
-- Sensor-Z zeigt nach oben
+- sensor Y points forward → body X = sensor Y
+- sensor X points right → body Y = −sensor X
+- sensor Z points up
 
-In `menuconfig` ist das **„270 deg: body X = sensor Y, body Y = −sensor X“**
-(`CONFIG_IMU_ROTATION_270`, Standard für den E1 Mini). Am Prüfstand prüfen!
+In `menuconfig` this is **"270 deg: body X = sensor Y, body Y = −sensor X"**
+(`CONFIG_IMU_ROTATION_270`, the default for the E1 Mini). Check it on the bench!
 
-### Drehrichtung der Motoren
+### Motor directions
 
-Aus dem Mischer der Werks-Firmware: **vorne links und hinten rechts drehen im
-Uhrzeigersinn**, vorne rechts und hinten links gegen den Uhrzeigersinn (von oben
-gesehen). Der Crazyflie-Mischer von ESP-Drone erwartet dasselbe, deshalb ist
-`MOTOR_YAW_INVERT` aus.
+From the vendor firmware's mixer: **front left and rear right spin clockwise**,
+front right and rear left counter-clockwise (seen from above). ESP-Drone's
+Crazyflie mixer expects the same, so `MOTOR_YAW_INVERT` is off.
 
-## Was gegenüber ESP-Drone geändert wurde
+## Changes compared to ESP-Drone
 
-- **Neues Board** `TARGET_E1_MINI` mit allen Pins (`menuconfig` → ESPDrone Config).
-- **MPU6500-Treiber per SPI** (`components/drivers/spi_devices/mpu6500`) und
-  Sensor-Schicht `sensors_mpu6500_spi.c`. Ohne Interrupt-Leitung gibt ein
-  Hardware-Timer den 1-kHz-Takt vor. Sensor- und Regel-Task laufen auf
-  CPU-Kern 1, WLAN und Webserver auf Kern 0.
-- **Gemeinsamer SPI-Bus** für Lagesensor und optionalen Flow-Sensor (`spi_bus`).
-- **Motor-PWM** 25 kHz / 10 Bit, Motor-Pins werden beim Start sofort auf LOW
-  gezogen. Den kurzen Motortest beim Start (`MOTORS_STARTUP_TEST`) hat Espressif
-  standardmäßig abgeschaltet; für den Prüfstand kann man ihn einschalten.
-- **Start gesperrt (disarmed).** Freischalten nur durch genau eine Quelle:
-  Web-Steuerung (Taste), App/cfclient/ESP-NOW (Gas einmal auf null) oder den
-  Parameter `system.forceArm`.
-- **Brownout-Reset aus**, wie in der Werks-Firmware: Beim Anlaufen der Motoren
-  bricht die 3,3-V-Versorgung kurz ein, ein Reset in der Luft wäre schlimmer.
-- **Partitionstabelle** für 4 MB mit zwei App-Bereichen (späteres Update über
-  WLAN) und Core-Dump-Bereich.
-- **Reglerwerte** für Roll und Nick aus der Werks-Firmware übernommen
-  (umgerechnet, siehe „Erster Flug“).
-- **Browser-Steuerung mit Captive Portal**, Akku-Schutz und Trimmung, siehe
+- **New board** `TARGET_E1_MINI` with all pins (`menuconfig` → ESPDrone Config).
+- **MPU6500 driver on SPI** (`components/drivers/spi_devices/mpu6500`) and the
+  sensor layer `sensors_mpu6500_spi.c`. Without an interrupt line, a hardware
+  timer provides the 1 kHz sample clock. Sensor and stabilizer tasks run on CPU
+  core 1, Wi-Fi and the web servers on core 0.
+- **Shared SPI bus** for the IMU and an optional flow sensor (`spi_bus`).
+- **Motor PWM** 25 kHz / 10 bit; the motor pins are pulled low right at boot.
+  Espressif switched the short motor test at startup (`MOTORS_STARTUP_TEST`) off
+  by default; turn it on for the bench test.
+- **Starts disarmed.** Arming by exactly one source: web control (button),
+  app/cfclient/ESP-NOW (throttle to zero once) or the parameter
+  `system.forceArm`.
+- **Brownout reset off**, as in the vendor firmware: the 3.3 V supply dips
+  briefly when the motors spin up, and a reset in the air would be worse.
+- **Partition table** for 4 MB with two app slots (later updates over Wi-Fi)
+  and a core dump partition.
+- **Controller gains** for roll and pitch taken from the vendor firmware
+  (converted, see "First flight").
+- **Browser control with captive portal**, battery protection and trim, see
   [webcontrol.md](webcontrol.md).
 
-## Werkzeuge einrichten
+## Set up the tools
 
-ESP-IDF **v5.5** (hier v5.5.6 mit Python 3.14 unter Fedora 44). v6.1 geht
-ebenfalls, GitHub Actions baut jede Änderung mit beiden Versionen:
+ESP-IDF **v5.5** (here v5.5.6 with Python 3.14 on Fedora 44). v6.1 works too;
+GitHub Actions builds every change with both versions:
 
 ```bash
 git clone -b v5.5.6 --depth 1 --recursive --shallow-submodules \
@@ -86,121 +84,122 @@ git clone -b v5.5.6 --depth 1 --recursive --shallow-submodules \
 . ~/esp/esp-idf-v5.5.6/export.sh
 ```
 
-Zugriff auf den USB-Seriell-Wandler des DevKits (`/dev/ttyUSB0`) braucht unter
-Fedora die Gruppe `dialout`:
+On Fedora, access to the DevKit's USB serial adapter (`/dev/ttyUSB0`) needs the
+group `dialout`:
 
 ```bash
-sudo usermod -aG dialout $USER     # danach ab- und wieder anmelden
+sudo usermod -aG dialout $USER     # then log out and back in
 ```
 
-## Werks-Firmware zuerst ausprobieren
+## Try the factory firmware first
 
-Bevor du etwas änderst: Fliegt die Drohne mit der Werks-Firmware, ist die
-Hardware in Ordnung, und du hast einen Vergleich für später.
+Before you change anything: if the drone flies with the factory firmware, the
+hardware is fine, and you have something to compare with later.
 
-- **Handy-Steuerung ab Werk:** WLAN `Drone_WiFi`, Passwort `12345678`, dann im
-  Browser `http://192.168.4.1` öffnen (die Seite öffnet sich nicht von selbst).
-- **Serielle Konsole**, Propeller ab:
+- **Phone control out of the box:** Wi-Fi `Drone_WiFi`, password `12345678`,
+  then open `http://192.168.4.1` in the browser (the page does not open by
+  itself).
+- **Serial console**, propellers off:
 
   ```bash
   . ~/esp/esp-idf-v5.5.6/export.sh
-  python -m serial.tools.miniterm --eol LF /dev/ttyUSB0 115200   # beenden: Strg+]
+  python -m serial.tools.miniterm --eol LF /dev/ttyUSB0 115200   # quit: Ctrl+]
   ```
 
-  - `imu` zeigt den Lagesensor, erwartet: `model: MPU-6500` und `who am I: 0x70`
-  - `mfl`, `mfr`, `mrl`, `mrr` lassen je einen Motor 3 s mit 30 % laufen (vorne
-    links, vorne rechts, hinten links, hinten rechts). Prüfen: richtige Position,
-    **vorne links und hinten rechts drehen im Uhrzeigersinn**, die anderen
-    gegen den Uhrzeigersinn (von oben gesehen).
+  - `imu` shows the IMU; expected: `model: MPU-6500` and `who am I: 0x70`
+  - `mfl`, `mfr`, `mrl`, `mrr` run one motor at 30 % for 3 s (front left, front
+    right, rear left, rear right). Check: correct position, **front left and
+    rear right spin clockwise**, the other two counter-clockwise (seen from
+    above).
 
-Die fertige Werks-Firmware (`XW-Drone.ino.merged.bin`) bietet der Händler nur
-über Baidu an (Konto nötig). Am einfachsten geht es mit der eigenen Sicherung
-aus dem nächsten Schritt zurück.
+The seller offers the factory firmware image (`XW-Drone.ino.merged.bin`) only
+on Baidu (account needed). The easiest way back is your own backup from the
+next step.
 
-## Werks-Firmware sichern (vor dem ersten Flashen!)
+## Back up the factory firmware (before the first flash!)
 
-Die Werks-Firmware ist auf die Drohne abgestimmt. Sichere den ganzen Flash,
-dann kannst du jederzeit zurück. **Propeller vorher abnehmen.**
-
-```bash
-. ~/esp/esp-idf-v5.5.6/export.sh
-esptool.py --port /dev/ttyUSB0 chip_id          # muss "ESP32" melden
-esptool.py --port /dev/ttyUSB0 flash_id         # zeigt die Flash-Größe (4 MB erwartet)
-esptool.py --port /dev/ttyUSB0 -b 921600 read_flash 0 ALL e1mini-werksfirmware.bin
-```
-
-Die Datei muss so groß sein wie der Flash (4 MB = 4194304 Bytes). Zurückspielen:
-
-```bash
-esptool.py --port /dev/ttyUSB0 -b 921600 write_flash 0 e1mini-werksfirmware.bin
-```
-
-## Bauen und flashen
+The factory firmware is tuned for the drone. Back up the whole flash, then you
+can always go back. **Remove the propellers first.**
 
 ```bash
 . ~/esp/esp-idf-v5.5.6/export.sh
-idf.py set-target esp32        # wählt automatisch das Board E1 Mini
+esptool.py --port /dev/ttyUSB0 chip_id          # must report "ESP32"
+esptool.py --port /dev/ttyUSB0 flash_id         # shows the flash size (4 MB expected)
+esptool.py --port /dev/ttyUSB0 -b 921600 read_flash 0 ALL e1mini-factory.bin
+```
+
+The file must be as large as the flash (4 MB = 4194304 bytes). To restore:
+
+```bash
+esptool.py --port /dev/ttyUSB0 -b 921600 write_flash 0 e1mini-factory.bin
+```
+
+## Build and flash
+
+```bash
+. ~/esp/esp-idf-v5.5.6/export.sh
+idf.py set-target esp32        # selects the E1 Mini board automatically
 idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-Einstellungen (Pins, Failsafe-Zeiten, WLAN-Name/Passwort) über `idf.py menuconfig`
-→ *ESPDrone Config* und *ESPDrone web control*.
+Settings (pins, failsafe times, Wi-Fi name and password) in `idf.py menuconfig`
+→ *ESPDrone Config* and *ESPDrone web control*.
 
-## Prüfstand-Checkliste — OHNE Propeller
+## Bench checklist — WITHOUT propellers
 
-Jeder Punkt muss stimmen, bevor Propeller montiert werden.
+Every item has to pass before the propellers go on.
 
-1. **Startprotokoll** (`idf.py monitor`):
-   - `MPU6500 SPI connection [OK], WHO_AM_I = 0x70` (0x71/0x73 bei MPU9250-Varianten)
+1. **Boot log** (`idf.py monitor`):
+   - `MPU6500 SPI connection [OK], WHO_AM_I = 0x70` (0x71/0x73 for MPU9250 variants)
    - `IMU sample timer running at 1000 Hz on core 1`
    - `web control ready: http://192.168.43.42/`
-   - kein Reset, kein `assert`; die LED blinkt im „alive“-Muster
-2. **Motor-Reihenfolge:** In `menuconfig` → *motors config* die Option
-   „Spin motors during startup self-test“ einschalten (standardmäßig aus) und
-   neu flashen. Beim Start laufen die Motoren dann nacheinander kurz an:
-   M1 vorne rechts → M2 hinten rechts → M3 hinten links → M4 vorne links.
-   Stimmt die Position nicht: Pins in `menuconfig` → *motors config* tauschen.
-   Danach die Option wieder ausschalten.
-3. **Lage:** Handy mit dem WLAN `ESP-DRONE_…` verbinden (Passwort `12345678`),
-   die Steuerseite öffnet sich. Drohne flach hinlegen und still liegen lassen,
-   bis „Bereit“ erscheint. Dann:
-   - Nase nach unten kippen → **N wird negativ**
-   - rechte Seite nach unten kippen → **R wird positiv**
-   - Stimmen Vorzeichen oder Achsen nicht: `IMU_ROTATION` in `menuconfig` ändern.
-4. **Gegensteuern (wichtigster Test):** Drohne in der Hand halten, Gas runter,
-   scharfschalten, Gas auf ca. 20 %:
-   - rechts nach unten kippen → die **rechten** Motoren drehen hörbar schneller
-   - Nase nach unten kippen → die **vorderen** Motoren drehen schneller
-   - im Uhrzeigersinn drehen → **vorne links und hinten rechts** drehen schneller
-   - Reagieren die falschen Motoren: **nicht fliegen**, Einbaulage bzw.
-     `MOTOR_YAW_INVERT` prüfen.
-5. **Failsafe:** scharf, Gas 30 %, dann am Handy das WLAN ausschalten. Nach
-   0,3 s gleichen sich die Motoren an (gerade ausrichten), nach 1 s wird es
-   leiser (sinken), nach 4 s stehen die Motoren. Im Protokoll erscheinen
-   `link failsafe: stage …` und `disarmed: link lost …`.
-6. **NOT-AUS:** scharf, Gas 30 %, NOT-AUS tippen → Motoren stehen sofort.
-7. **Akku:** Spannung auf der Seite mit einem Multimeter am Akku vergleichen.
-   Bei Abweichung `BATTERY_DIVIDER_X1000` anpassen. Hinweis: Über ca. 4,05 V
-   kann der ESP32-ADC wegen des Spannungsteilers nicht mehr genau messen.
-   Unter 3,4 V lässt sich die Drohne nicht scharfschalten, im Flug landet sie
-   unter 3,0 V von selbst (siehe [webcontrol.md](webcontrol.md#akku-schutz)).
+   - no reset, no `assert`; the LED blinks in the "alive" pattern
+2. **Motor order:** in `menuconfig` → *motors config*, turn on "Spin motors
+   during startup self-test" (off by default) and flash again. At boot the
+   motors then spin briefly one after the other: M1 front right → M2 rear right
+   → M3 rear left → M4 front left. If a position is wrong, swap the pins in
+   `menuconfig` → *motors config*. Turn the option off again afterwards.
+3. **Attitude:** join the Wi-Fi `ESP-DRONE_…` with a phone (password
+   `12345678`); the control page opens. Put the drone down flat and keep it
+   still until "Calibrating – keep the drone still" disappears and "Arm" can be
+   pressed. Then:
+   - tilt the nose down → **P goes negative**
+   - tilt the right side down → **R goes positive**
+   - If a sign or an axis is wrong: change `IMU_ROTATION` in `menuconfig`.
+4. **Counter-steering (the most important test):** hold the drone in your
+   hand, throttle down, arm, throttle to about 20 %:
+   - tilt it right side down → the **right** motors get audibly faster
+   - tilt the nose down → the **front** motors get faster
+   - turn it clockwise → **front left and rear right** get faster
+   - If the wrong motors react: **do not fly**; check the IMU orientation and
+     `MOTOR_YAW_INVERT`.
+5. **Failsafe:** armed, throttle at 30 %, then switch off Wi-Fi on the phone.
+   After 0.3 s the motors even out (levelling out), after 1 s they get quieter
+   (descending), after 4 s they stop. The log shows `link failsafe: stage …`
+   and `disarmed: link lost …`.
+6. **STOP:** armed, throttle at 30 %, tap STOP → the motors stop at once.
+7. **Battery:** compare the voltage on the page with a multimeter at the
+   battery. If they differ, adjust `BATTERY_DIVIDER_X1000`. Note: above about
+   4.05 V the ESP32 ADC cannot measure accurately because of the divider.
+   Below 3.4 V the drone cannot be armed; in flight it lands by itself below
+   3.0 V (see [webcontrol.md](webcontrol.md#battery-protection)).
 
-## Erster Flug
+## First flight
 
-- Kleiner, freier Raum, keine Personen in der Nähe, Prop-Guards montiert.
-- Propeller wie ab Werk (Drehrichtung beachten), Akku voll.
-- Drohne eben hinstellen, bis „Bereit“ still liegen lassen (Kalibrierung).
-- Scharfschalten, Gas langsam erhöhen. Kippt oder dreht sie beim Abheben weg:
-  sofort **NOT-AUS**.
-- Reglerwerte: Für Roll und Nick nutzt der E1 Mini die Drehraten-Werte der
-  Werks-Firmware, in ESP-Drone-Einheiten umgerechnet: P 137, I 229, D 2,3 statt
-  der Crazyflie-Werte 250/500/2,5. Umrechnung: Wert × 2 · 65535 / 57,3, weil der
-  ESP-Drone-Mischer Roll und Nick halbiert. Gier (P 120) und Lageregler (P 5,9)
-  bleiben ESP-Drone-Standard. Die Werks-Firmware nutzt für Gier umgerechnet
-  etwa P 343, verlässt sich dabei aber auf eine Entsättigung der Motoren, die
-  der ESP-Drone-Mischer nicht hat. Schwingt der E1 Mini oder dreht er träge um
-  die Hochachse, die Parameter `pid_rate.*` und `pid_attitude.*` per cfclient
-  (UDP) vorsichtig anpassen.
-- Driftet er beim Schweben gleichmäßig zur Seite, mit „Trimm“ auf der
-  Steuerseite ausgleichen (siehe [webcontrol.md](webcontrol.md#trimmen)).
+- Small, open room, nobody nearby, prop guards on.
+- Propellers as from the factory (mind the direction), battery full.
+- Put the drone down level and keep it still until the calibration is done.
+- Arm and raise the throttle slowly. If it tips over or spins away on takeoff:
+  **STOP** at once.
+- Controller gains: for roll and pitch the E1 Mini uses the vendor firmware's
+  rate gains, converted to ESP-Drone units: P 137, I 229, D 2.3 instead of the
+  Crazyflie values 250/500/2.5. Conversion: value × 2 · 65535 / 57.3, because
+  the ESP-Drone mixer halves roll and pitch. Yaw (P 120) and the attitude loop
+  (P 5.9) stay at the ESP-Drone defaults. The vendor firmware uses about P 343
+  for yaw, but relies on motor desaturation that the ESP-Drone mixer does not
+  have. If the E1 Mini oscillates or turns sluggishly around the vertical axis,
+  adjust the parameters `pid_rate.*` and `pid_attitude.*` carefully with
+  cfclient (UDP).
+- If it drifts steadily to one side while hovering, correct it with "Trim" on
+  the control page (see [webcontrol.md](webcontrol.md#trim)).

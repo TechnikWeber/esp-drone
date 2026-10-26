@@ -1,39 +1,66 @@
 
-## Diese Fork: ESP-Drone mit Browser-Steuerung
+## This fork: ESP-Drone with browser control
 
 [![Build](https://github.com/TechnikWeber/esp-drone/actions/workflows/build_project.yml/badge.svg?branch=webcontrol)](https://github.com/TechnikWeber/esp-drone/actions/workflows/build_project.yml?query=branch%3Awebcontrol)
 
-Dies ist eine **geänderte Fassung** von [espressif/esp-drone](https://github.com/espressif/esp-drone)
-(Stand `master@9d5a4f8` vom 26.10.2026). Änderungen ab 25.10.2026 von Philipp Weber
-([TechnikWeber](https://github.com/TechnikWeber)):
+Fly the drone from any phone browser: join the drone's Wi-Fi and the control
+page opens by itself (captive portal). No app, no account, no internet.
 
-- **Steuern im Browser:** Das Handy verbindet sich mit dem WLAN der Drohne, ein
-  Captive Portal öffnet die Steuerseite (WebSocket, Failsafe bei Verbindungsverlust,
-  Notlandung bei leerem Akku, Trimmung). Keine App nötig. Siehe
-  [docs/webcontrol.md](docs/webcontrol.md).
-- **Neues Board: CHERGLOW E1 Mini**, ein Bausatz mit aufgestecktem ESP32-DevKit
-  und MPU6500 per SPI, der unter anderem als „ESP32 Drone Kit“ verkauft wird.
-  Pins und Reglerwerte mit der Werks-Firmware (CF-Drone) abgeglichen. Siehe
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/webcontrol-flying.png" alt="Control page while flying: two sticks, attitude, round trip time and battery"></td>
+    <td width="50%"><img src="docs/images/webcontrol-failsafe.png" alt="Link lost: the drone levels out and descends by itself"></td>
+  </tr>
+  <tr>
+    <td><b>Flying.</b> Round trip time, battery, attitude, thrust and dropped late commands at a glance.</td>
+    <td><b>Link lost.</b> The drone holds the last command for 0.3 s, then levels out, descends and turns the motors off.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/webcontrol-trim.png" alt="Trim panel with roll and pitch trim"></td>
+    <td><img src="docs/images/webcontrol-battery.png" alt="Forced landing with an empty battery"></td>
+  </tr>
+  <tr>
+    <td><b>Trim.</b> Correct a sideways drift in 0.5° steps; the drone stores it.</td>
+    <td><b>Empty battery.</b> The drone lands by itself while you keep steering.</td>
+  </tr>
+</table>
+
+What this fork adds to [espressif/esp-drone](https://github.com/espressif/esp-drone)
+(based on `master@9d5a4f8` of 26 Oct 2026; changes since 25 Oct 2026 by Philipp
+Weber, [TechnikWeber](https://github.com/TechnikWeber)):
+
+- **Browser control over Wi-Fi with a robust link.** A WebSocket instead of UDP,
+  with TCP's weak spots handled: only the newest command counts, commands that
+  arrive late after a stall are dropped, and a staged failsafe takes over when
+  commands stop coming. The web server runs in its own tasks (on the ESP32 on
+  the other CPU core), so a page reload cannot stall the flight controller. The
+  page speaks English and German. See [docs/webcontrol.md](docs/webcontrol.md).
+- **Battery protection and trim** for web flights: forced landing below 3.0 V,
+  no arming below 3.4 V, roll and pitch trim stored on the drone.
+- **New board: CHERGLOW E1 Mini**, a kit with a plug-in ESP32 DevKit and an
+  MPU6500 on SPI, sold among others as "ESP32 Drone Kit". Pins and controller
+  gains checked against the vendor firmware (CF-Drone). See
   [docs/e1-mini.md](docs/e1-mini.md).
-- **Freischalten (Arming)** durch genau eine Quelle: Web-Pilot, App/cfclient/ESP-NOW
-  (Gas einmal auf null) oder `system.forceArm`. NOT-AUS von jedem verbundenen Handy.
-- Partitionstabelle mit zwei App-Bereichen und Core-Dump-Bereich.
+- **Arming by exactly one source:** web pilot, app/cfclient/ESP-NOW (throttle to
+  zero once) or `system.forceArm`. Every connected phone can trigger STOP.
+- Partition table with two app slots and a core dump partition.
 
-Alle Boards des Originals bleiben erhalten. GitHub Actions baut jede Änderung
-mit ESP-IDF 5.5 und 6.1: ESP32 (E1 Mini), ESP32-S2 und -S3 (ESP32-S2-Drone),
-ESP32-P4 (ohne Web-Steuerung, der P4 hat kein eigenes WLAN) und ESP32-S31
-(Vorschau). ESPlane (ESP32) ist lokal mit 5.5 gebaut. **Auf echter Hardware ist
-noch nichts getestet.** Auf dem ESP32-S2 ist der interne RAM knapp: Dort sind
-Core-Dump und die SPI-Interrupt-Routine im RAM abgeschaltet; ob der Heap für die
-Web-Steuerung reicht, muss ein Test zeigen.
+All boards of the original are kept. GitHub Actions builds every change with
+ESP-IDF 5.5 and 6.1: ESP32 (E1 Mini), ESP32-S2 and -S3 (ESP32-S2-Drone), ESP32-P4
+(without web control, the P4 has no Wi-Fi of its own) and ESP32-S31 (preview).
+ESPlane (ESP32) was built locally with 5.5. **Nothing has been tested on real
+hardware yet;** the screenshots come from the simulated drone in
+`tools/mock_drone.py`. RAM on the ESP32-S2 is tight: the core dump is off there
+and the SPI interrupt handler is not in IRAM; a test has to show whether the heap
+is enough for web control.
 
-Lizenz unverändert: **GPL-3.0** (siehe [LICENSE](LICENSE)). Copyright der
-ursprünglichen Teile: Espressif Systems und Bitcraze AB.
+License unchanged: **GPL-3.0** (see [LICENSE](LICENSE)). Copyright of the
+original parts: Espressif Systems and Bitcraze AB.
 
 ```bash
 . ~/esp/esp-idf-v5.5.6/export.sh
-idf.py set-target esp32       # E1 Mini; esp32s2/esp32s3 für die ESP32-S2-Drone,
-                              # Board wählen mit idf.py menuconfig
+idf.py set-target esp32       # E1 Mini; esp32s2/esp32s3 for the ESP32-S2-Drone,
+                              # pick the board in idf.py menuconfig
 idf.py build && idf.py -p /dev/ttyUSB0 flash monitor
 ```
 

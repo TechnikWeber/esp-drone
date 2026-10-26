@@ -53,6 +53,21 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
   zero once) or `system.forceArm`. Every connected phone can trigger STOP.
 - Partition table with two app slots and a core dump partition.
 
+**Parts ordered for the E1 Mini** (October 2026, about 41 € with shipping):
+
+<table>
+  <tr>
+    <td width="260"><img src="docs/images/shopping-cart.jpg" width="240" alt="AliExpress cart: E1 Mini drone kit and two 1000 mAh batteries, 40.79 EUR in total"></td>
+    <td>
+      <a href="https://www.aliexpress.com/item/1005013106847900.html"><b>Drone kit</b></a>: "ESP32 Drone"
+      E1 Mini, variant "Finished Product", shipped without battery.<br><br>
+      <a href="https://www.aliexpress.com/item/1005004375261361.html"><b>Batteries</b></a>: 2 × 1S LiPo
+      1000 mAh, type 503450 (50 × 34 × 5 mm), PH2.0 plug. Recommended in a forum, not tested here
+      yet. What a battery has to meet: <a href="docs/e1-mini.md#battery">docs/e1-mini.md</a>.
+    </td>
+  </tr>
+</table>
+
 All boards of the original are kept. GitHub Actions builds every change with
 ESP-IDF 5.5 and 6.1: ESP32 (E1 Mini), ESP32-S2 and -S3 (ESP32-S2-Drone), ESP32-P4
 (without web control, the P4 has no Wi-Fi of its own) and ESP32-S31 (preview).

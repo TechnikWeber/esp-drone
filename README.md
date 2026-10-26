@@ -6,6 +6,11 @@
 Fly the drone from any phone browser: join the drone's Wi-Fi and the control
 page opens by itself (captive portal). No app, no account, no internet.
 
+**Install:** one click in the [web flasher](https://technikweber.github.io/esp-drone/)
+(Chrome or Edge on a computer), or download an image from the
+[releases](https://github.com/TechnikWeber/esp-drone/releases). All ways, including
+Espressif's own tools: [docs/flashing.md](docs/flashing.md).
+
 <table>
   <tr>
     <td width="50%"><img src="docs/images/webcontrol-flying.png" alt="Control page while flying: two sticks, attitude, round trip time and battery"></td>

@@ -162,6 +162,9 @@ esptool.py --port /dev/ttyUSB0 -b 921600 write_flash 0 e1mini-factory.bin
 
 ## Build and flash
 
+Without building anything: use the web flasher or a release image, see
+[flashing.md](flashing.md). To build it yourself:
+
 ```bash
 . ~/esp/esp-idf-v5.5.6/export.sh
 idf.py set-target esp32        # selects the E1 Mini board automatically

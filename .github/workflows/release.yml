@@ -1,0 +1,89 @@
+name: Release
+
+# A tag v* builds the firmware images, publishes them as a GitHub release
+# (pre-release while nothing is tested on hardware) and deploys the web
+# flasher to GitHub Pages. Started by hand, it only redeploys the web flasher.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: esp32
+            name: e1-mini-esp32        # default board of the ESP32: E1 Mini
+          - target: esp32s2
+            name: s2-drone-esp32s2     # default board of the S2 and S3: ESP32-S2-Drone
+          - target: esp32s3
+            name: s2-drone-esp32s3
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0               # the firmware version comes from git describe
+      - name: Build and merge into one image
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          . "${IDF_PATH}/export.sh"
+          idf.py -B build -D IDF_TARGET=${{ matrix.target }} build
+          grep -E '^CONFIG_TARGET_[A-Z0-9_]+=y' build/sdkconfig
+          cd build
+          python -m esptool --chip ${{ matrix.target }} merge_bin -o "../espdrone-${{ matrix.name }}.bin" @flash_args
+      - uses: actions/upload-artifact@v4
+        with:
+          name: espdrone-${{ matrix.name }}
+          path: espdrone-${{ matrix.name }}.bin
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                  # the release
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: espdrone-*
+          merge-multiple: true
+      - name: Web flasher site and release notes
+        run: >
+          python3 tools/web_flasher/make_site.py --version "${{ github.ref_name }}"
+          --repo "${{ github.repository }}" --bins dist --out site --notes release-notes.md
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" dist/*.bin site/SHA256SUMS.txt
+          --repo "${{ github.repository }}" --prerelease
+          --title "${{ github.ref_name }}: browser control (not tested on hardware yet)"
+          --notes-file release-notes.md
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

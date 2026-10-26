@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP-Drone flasher</title>
+<meta name="description" content="Install the ESP-Drone web control firmware from the browser.">
+<!--
+  Web flasher for https://github.com/{{REPO}} ({{VERSION}}).
+  Built by tools/web_flasher/make_site.py, published to GitHub Pages by
+  .github/workflows/release.yml. Flashing: ESP Web Tools (Apache-2.0).
+-->
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+:root{--bg:#f6f8fa;--card:#fff;--text:#1f2328;--dim:#59636e;--line:#d1d9e0;--accent:#0969da;--warn-bg:#fff8c5;--warn-line:#d4a72c}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#151b23;--text:#e6edf3;--dim:#9198a1;--line:#30363d;--accent:#4493f8;--warn-bg:#2e2410;--warn-line:#9e6a03}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 48px}
+h1{font-size:28px;margin:0 0 8px}
+h2{font-size:20px;margin:0 0 6px}
+a{color:var(--accent)}
+.lead{color:var(--dim);margin:0 0 20px}
+.warn{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:10px;padding:12px 14px;margin:0 0 24px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin:0 0 28px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.card img{width:100%;height:190px;object-fit:contain;background:#fff;border-radius:8px}
+.card p{margin:0;color:var(--dim);flex:1}
+.install{font:inherit;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:8px;padding:10px 16px;cursor:pointer;width:100%}
+.install:hover{filter:brightness(1.1)}
+.note{display:block;color:var(--dim);font-size:14px}
+ol{padding-left:22px}
+li{margin:4px 0}
+code{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:14px}
+footer{margin-top:32px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>ESP-Drone flasher</h1>
+  <p class="lead">Install <a href="https://github.com/{{REPO}}">ESP-Drone with browser control</a>
+    ({{VERSION}}) straight from this page: fly from your phone over the drone's Wi-Fi,
+    with a staged failsafe, battery protection and trim.</p>
+
+  <div class="warn"><b>Not tested on real hardware yet.</b> Remove the propellers first. To be able
+    to go back, back up the factory firmware before you install
+    (<a href="https://github.com/{{REPO}}/blob/webcontrol/docs/e1-mini.md#back-up-the-factory-firmware-before-the-first-flash">how</a>).
+    Installing replaces everything on the chip, including stored settings.</div>
+
+  <section class="cards">
+    <article class="card">
+      <img src="e1-mini.jpg" alt="E1 Mini quadcopter kit with a plug-in ESP32 DevKit">
+      <h2>E1 Mini</h2>
+      <p>Mini quadcopter kit sold as "ESP32 Drone", often with "E1" or "E1 Mini" in the name:
+        ESP32 DevKit on the frame, MPU6500 on SPI, 8520 motors.</p>
+      <esp-web-install-button manifest="manifest-e1-mini.json">
+        <button slot="activate" class="install">Install on the E1 Mini</button>
+        <span slot="unsupported" class="note">Your browser cannot flash. Use Chrome or Edge on a computer.</span>
+        <span slot="not-allowed" class="note">Flashing needs a secure (HTTPS) page.</span>
+      </esp-web-install-button>
+    </article>
+    <article class="card">
+      <img src="s2-drone.png" alt="Espressif ESP32-S2-Drone">
+      <h2>Espressif ESP32-S2-Drone</h2>
+      <p>Espressif's own ESP-Drone board, with an ESP32-S2 or an ESP32-S3. The right image is picked
+        from the chip.</p>
+      <esp-web-install-button manifest="manifest-s2-drone.json">
+        <button slot="activate" class="install">Install on the ESP32-S2-Drone</button>
+        <span slot="unsupported" class="note">Your browser cannot flash. Use Chrome or Edge on a computer.</span>
+        <span slot="not-allowed" class="note">Flashing needs a secure (HTTPS) page.</span>
+      </esp-web-install-button>
+    </article>
+  </section>
+
+  <h2>How it works</h2>
+  <ol>
+    <li>Use Chrome or Edge on a computer. Phones, Firefox and Safari cannot flash.</li>
+    <li>Connect the drone's ESP32 with a USB data cable. On Linux your user has to be in the group
+      <code>dialout</code>.</li>
+    <li>Click "Install", pick the serial port, tick "Erase device" for the first install and wait
+      about a minute.</li>
+    <li>Unplug, insert the battery and join the Wi-Fi <code>ESP-DRONE_…</code> with your phone
+      (password <code>12345678</code>): the control page opens by itself.</li>
+  </ol>
+  <p>No port in the list? Try another cable (some only charge), or hold the BOOT button on the ESP32
+    while you plug it in.</p>
+  <p>Other ways to flash, including Espressif's own tools:
+    <a href="https://github.com/{{REPO}}/blob/webcontrol/docs/flashing.md">docs/flashing.md</a> ·
+    firmware files: <a href="https://github.com/{{REPO}}/releases">releases</a></p>
+
+  <footer>GPL-3.0 · ESP-Drone © Espressif Systems · Crazyflie © Bitcraze AB ·
+    web control © 2026 Philipp Weber · flashing by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></footer>
+</main>
+</body>
+</html>

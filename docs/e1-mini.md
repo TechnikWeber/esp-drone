@@ -71,8 +71,8 @@ gesehen). Der Crazyflie-Mischer von ESP-Drone erwartet dasselbe, deshalb ist
 
 ## Werkzeuge einrichten
 
-ESP-IDF **v5.5** (hier v5.5.6 mit Python 3.14 unter Fedora 44). Das Original
-unterstützt auch v6.1, mit dieser Fassung ist v6.1 aber noch nicht gebaut:
+ESP-IDF **v5.5** (hier v5.5.6 mit Python 3.14 unter Fedora 44). v6.1 geht
+ebenfalls, GitHub Actions baut jede Änderung mit beiden Versionen:
 
 ```bash
 git clone -b v5.5.6 --depth 1 --recursive --shallow-submodules \

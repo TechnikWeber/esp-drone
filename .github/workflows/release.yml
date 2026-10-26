@@ -42,7 +42,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           . "${IDF_PATH}/export.sh"
           idf.py -B build -D IDF_TARGET=${{ matrix.target }} build
-          grep -E '^CONFIG_TARGET_[A-Z0-9_]+=y' build/sdkconfig
+          grep -E '^CONFIG_TARGET_[A-Z0-9_]+=y' sdkconfig     # idf.py keeps it in the project root
           cd build
           python -m esptool --chip ${{ matrix.target }} merge_bin -o "../espdrone-${{ matrix.name }}.bin" @flash_args
       - uses: actions/upload-artifact@v4

@@ -1,0 +1,99 @@
+menu "ESPDrone web control (captive portal)"
+
+    config WEBCTRL_ENABLE
+        bool "Control the drone from a browser (captive portal + WebSocket)"
+        depends on TRANSPORT_NATIVE_WIFI
+        default y
+        select HTTPD_WS_SUPPORT
+        help
+            Phones that join the drone's Wi-Fi get the control page as captive
+            portal. The page sends stick commands over a WebSocket; the drone
+            answers with telemetry. See docs/webcontrol.md.
+
+    if WEBCTRL_ENABLE
+
+        config WEBCTRL_CAPTIVE_DNS
+            bool "Answer every DNS query with the drone's address"
+            default y
+            help
+                Needed for the automatic captive portal pop-up: the phone's
+                connectivity check lands on the drone and gets redirected to the
+                control page.
+
+        config WEBCTRL_MAX_ANGLE_DEG
+            int "Full stick roll / pitch angle (deg)"
+            range 5 45
+            default 15
+
+        config WEBCTRL_MAX_YAW_RATE_DEG
+            int "Full stick yaw rate (deg/s)"
+            range 30 400
+            default 120
+
+        menu "Link loss failsafe"
+
+            config WEBCTRL_OK_MS
+                int "Commands count as fresh up to (ms)"
+                range 20 500
+                default 100
+                help
+                    Commands arrive every 20 ms. Up to this age the drone simply
+                    follows the last one.
+
+            config WEBCTRL_HOLD_MS
+                int "Hold the last command up to (ms)"
+                range 50 1000
+                default 300
+                help
+                    A short gap (Wi-Fi retry, TCP retransmission) is bridged by
+                    holding the last stick input. After this time the drone
+                    levels out (roll, pitch and yaw rate zero, thrust not above
+                    the estimated hover thrust).
+
+            config WEBCTRL_DESCEND_MS
+                int "Start descending after (ms)"
+                range 300 5000
+                default 1000
+                help
+                    After this time without fresh commands the thrust drops below
+                    the estimated hover thrust and the drone sinks.
+
+            config WEBCTRL_OFF_MS
+                int "Motors off after (ms)"
+                range 1000 20000
+                default 4000
+                help
+                    After this time without fresh commands the motors stop and
+                    the drone disarms. Arming again needs the throttle down.
+
+            config WEBCTRL_DESCEND_PERCENT
+                int "Descent thrust in % of the estimated hover thrust"
+                range 50 100
+                default 85
+
+            config WEBCTRL_STALE_MS
+                int "Drop commands that arrive later than (ms)"
+                range 50 1000
+                default 250
+                help
+                    Delay relative to the fastest frame seen in the last seconds.
+                    After a TCP stall the queued old commands arrive in a burst;
+                    the late ones are dropped instead of replayed.
+
+        endmenu
+
+        config WEBCTRL_TELEMETRY_HZ
+            int "Telemetry rate (Hz)"
+            range 5 50
+            default 20
+
+        config WEBCTRL_MAX_CLIENTS
+            int "Browser connections at the same time"
+            range 1 4
+            default 3
+            help
+                One of them can fly, the others see the telemetry.
+
+    endif
+
+endmenu

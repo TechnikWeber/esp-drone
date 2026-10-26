@@ -1,3 +1,13 @@
 CONFIG_FREERTOS_UNICORE=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
+# ESP32-S2: IRAM and DRAM share one memory. No core dump and fewer sockets than
+# on the other chips (enough for both web servers, DNS and UDP), so the web
+# control fits next to the flight controller.
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_FREERTOS_ISR_STACKSIZE=2048
+# SPI is only used by the optional flow sensor, in polling mode: its interrupt
+# handler does not need to stay in IRAM (saves about 4 KB of internal RAM).
+CONFIG_SPI_MASTER_ISR_IN_IRAM=n

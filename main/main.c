@@ -31,6 +31,9 @@
 #include "platform.h"
 #include "system.h"
 #include "motors.h"
+#ifdef CONFIG_WEBCTRL_ENABLE
+#include "webctrl.h"
+#endif
 #define DEBUG_MODULE "APP_MAIN"
 #include "debug_cf.h"
 
@@ -62,5 +65,10 @@ void app_main()
 
     /*launch the system task */
     systemLaunch();
+
+#ifdef CONFIG_WEBCTRL_ENABLE
+    /* Browser control: captive portal + WebSocket. Waits for Wi-Fi itself. */
+    webctrlLaunch();
+#endif
 
 }

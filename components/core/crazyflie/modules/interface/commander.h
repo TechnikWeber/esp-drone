@@ -38,6 +38,7 @@
 #define COMMANDER_PRIORITY_DISABLE 0
 #define COMMANDER_PRIORITY_CRTP    1
 #define COMMANDER_PRIORITY_EXTRX   2
+#define COMMANDER_PRIORITY_WEB     3
 
 void commanderInit(void);
 bool commanderTest(void);

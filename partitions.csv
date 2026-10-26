@@ -1,0 +1,12 @@
+# ESP-Drone partition table for 4 MB flash.
+# Two app slots so the firmware can later be updated over the air (web UI),
+# a core dump slot to analyse crashes after the fact. Offsets are left to the
+# generator because the partition table sits at 0x8000 on most chips but at
+# 0x10000 on the ESP32-P4.
+# Name,   Type, SubType,  Offset, Size
+nvs,      data, nvs,      ,       0x6000,
+otadata,  data, ota,      ,       0x2000,
+phy_init, data, phy,      ,       0x1000,
+ota_0,    app,  ota_0,    ,       0x1E0000,
+ota_1,    app,  ota_1,    ,       0x1E0000,
+coredump, data, coredump, ,       0x10000,

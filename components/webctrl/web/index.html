@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>Drohnensteuerung</title>
+<!--
+  ESP-Drone web control. Copyright 2026 Philipp Weber.
+  Based on ESP-Drone (Espressif Systems) and the Crazyflie firmware (Bitcraze AB).
+  Licensed under the GNU General Public License v3, see the Info dialog.
+  Protocol: docs/webcontrol.md
+-->
+<style>
+:root{--bg:#0b0f14;--panel:#141b24;--line:#263241;--text:#e6edf3;--dim:#8b9bb0;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#58a6ff;--knob:#c9d1d9}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;
+  touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+button{font:inherit;color:inherit;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:8px 12px;touch-action:manipulation}
+button:disabled{opacity:.45}
+#app{position:fixed;inset:0;display:grid;grid-template-rows:auto auto 1fr;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#bar button{padding:5px 10px;font-size:13px}
+#bar{display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel);border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;background:#0e141b;border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--bad)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+#bar .grow{flex:1}
+#msg{min-height:28px;padding:4px 10px;text-align:center;font-weight:600;transition:background .2s}
+#msg.info{color:var(--dim)}#msg.warn{background:#3a2a07;color:#ffd479}#msg.bad{background:#4a1214;color:#ffb3b0}#msg.ok{color:var(--ok)}
+#main{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;padding:6px 14px 12px}
+.stick{position:relative;justify-self:center;width:min(42vw,62vh,330px);aspect-ratio:1;border-radius:22px;background:radial-gradient(circle at 50% 50%,#18212c 0,#121922 70%);border:1px solid var(--line)}
+.stick::before,.stick::after{content:"";position:absolute;background:var(--line)}
+.stick::before{left:50%;top:8%;bottom:8%;width:1px}.stick::after{top:50%;left:8%;right:8%;height:1px}
+.knob{position:absolute;left:50%;top:50%;width:26%;aspect-ratio:1;margin:-13% 0 0 -13%;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,var(--knob) 45%,#8a96a3);box-shadow:0 4px 14px #0009;will-change:transform}
+.stick .lbl{position:absolute;top:6px;width:100%;text-align:center;color:var(--dim);font-size:12px;pointer-events:none}
+#mid{display:flex;flex-direction:column;align-items:center;gap:10px;min-width:150px}
+#arm{width:150px;height:56px;font-weight:700;position:relative;overflow:hidden}
+#arm .fill{position:absolute;inset:0;width:0;background:#2a4d2e}
+#arm span{position:relative}
+#arm.armed{background:#5a1d1d;border-color:var(--bad)}
+#kill{width:150px;height:64px;font-weight:800;font-size:18px;background:#b42318;border-color:#ff6b5e;color:#fff;letter-spacing:.5px}
+#horizon{width:110px;height:110px;border-radius:50%;overflow:hidden;position:relative;border:1px solid var(--line);background:#5b3a1e}
+#sky{position:absolute;left:-50%;top:-50%;width:200%;height:100%;background:#2b5f8f;transform-origin:50% 100%}
+#hz-mark{position:absolute;left:30%;right:30%;top:50%;height:2px;background:#ffd479}
+#stats{color:var(--dim);font-size:12px;text-align:center;font-variant-numeric:tabular-nums;white-space:pre-line}
+#rotate,#dlg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0b0f14f2;z-index:5;padding:20px;text-align:center}
+#dlg .box{max-width:560px;max-height:90vh;overflow:auto;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;user-select:text;-webkit-user-select:text;touch-action:pan-y}
+#dlg h2{margin:.2em 0 .5em;font-size:18px}#dlg p{margin:.5em 0;color:#c8d1db}#dlg small{color:var(--dim)}
+@media (orientation:portrait){#rotate{display:flex}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <span class="pill"><span id="cdot" class="dot"></span><span id="ctext">Verbinde…</span></span>
+    <span class="pill" id="bat">Akku –</span>
+    <span class="pill" id="state">Gesperrt</span>
+    <span class="grow"></span>
+    <button id="fs">Vollbild</button>
+    <button id="info">Info</button>
+  </div>
+  <div id="msg" class="info">Mit dem Drohnen-WLAN verbinden…</div>
+  <div id="main">
+    <div class="stick" id="left"><div class="knob"></div><div class="lbl">Gas · Gieren</div></div>
+    <div id="mid">
+      <button id="arm" disabled><div class="fill"></div><span>Nicht bereit</span></button>
+      <div id="horizon"><div id="sky"></div><div id="hz-mark"></div></div>
+      <div id="stats">–</div>
+      <button id="kill">NOT-AUS</button>
+    </div>
+    <div class="stick" id="right"><div class="knob"></div><div class="lbl">Nicken · Rollen</div></div>
+  </div>
+</div>
+<div id="rotate"><div><p style="font-size:42px;margin:0">⟳</p><p>Bitte das Handy quer halten.</p></div></div>
+<div id="dlg"><div class="box">
+  <h2>Drohnensteuerung</h2>
+  <p id="dinfo">–</p>
+  <p><b>Bedienung:</b> Linker Stick: hoch/runter = Gas (bleibt stehen), links/rechts = drehen. Rechter Stick: vor/zurück und seitwärts. Zum Scharfschalten Gas ganz runter und „Scharfschalten“ 1&nbsp;Sekunde halten. NOT-AUS stoppt die Motoren sofort, egal wer steuert.</p>
+  <p><b>Verbindungsverlust:</b> Kurze Aussetzer überbrückt die Drohne, danach richtet sie sich gerade aus, sinkt ab und schaltet die Motoren ab (<span id="dfs">–</span>).</p>
+  <p><b>Sicherheit:</b> Propeller können verletzen. Nur in sicherer Umgebung fliegen, Abstand zu Personen halten.</p>
+  <p><small>ESP-Drone Web Control · Copyright © 2026 Philipp Weber.
+  Basiert auf ESP-Drone (© Espressif Systems) und der Crazyflie-Firmware (© Bitcraze AB).
+  Dieses Programm ist freie Software unter der GNU General Public License Version 3 und wird
+  OHNE JEDE GEWÄHRLEISTUNG bereitgestellt. Sie dürfen es unter den Bedingungen der Lizenz
+  weitergeben und verändern. Lizenztext: https://www.gnu.org/licenses/gpl-3.0.html ·
+  Quellcode: siehe Repository des Projekts (Datei LICENSE).</small></p>
+  <p style="text-align:right"><button id="dclose">Schließen</button></p>
+</div></div>
+<script>
+"use strict";
+// ---- protocol (docs/webcontrol.md) --------------------------------------
+const MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 36;
+const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
+const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
+const STAGES = ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich gerade aus",
+  "Verbindung weg – Drohne sinkt ab", "Motoren aus"];
+const ARM_REASONS = ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, Drohne still hinstellen)", "Gas ganz runter zum Scharfschalten",
+  "Akku zu schwach", "Andere Steuerung aktiv (App/cfclient/anderes Handy)", "Drohne liegt auf dem Kopf", "Erst loslassen, dann neu scharfschalten"];
+const SEND_MS = 20, TELEMETRY_WARN_MS = 600, TELEMETRY_DEAD_MS = 2500;
+const EXPO = 0.35, DEADBAND = 0.04;
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} },
+};
+const ms32 = () => (Math.floor(performance.now()) >>> 0);
+
+// ---- state ---------------------------------------------------------------
+let ws = null, wsOpen = false, ready = false, infoSeen = false, reconnectDelay = 250, reconnectTimer = 0;
+let seq = 0, sent = 0, skipped = 0;
+let lastTel = 0, tel = null, info = null, rtt = -1;
+let armReq = false, armSince = 0, killUntil = 0, paused = false;
+let token = (store.get("wc_token") | 0) >>> 0;
+const sticks = { thr: 0, yaw: 0, pitch: 0, roll: 0 };
+// Throttle of a session that may still be flying (page reloaded mid-air). It is
+// only applied once the drone confirms that it resumed this session.
+const savedThr = parseFloat(store.get("wc_thr"));
+let resumeThr = (token && savedThr >= 0 && savedThr <= 1) ? savedThr : null;
+
+// ---- sticks --------------------------------------------------------------
+function expo(v) {
+  const s = Math.sign(v), a = Math.abs(v);
+  if (a < DEADBAND) return 0;
+  const x = (a - DEADBAND) / (1 - DEADBAND);
+  return s * ((1 - EXPO) * x + EXPO * x * x * x);
+}
+function makeStick(el, onMove, onRelease) {
+  const knob = el.querySelector(".knob");
+  let id = null;
+  // knob travel: 37 % of the pad = 37/26 = 1.42 knob widths
+  const set = (x, y) => { knob.style.transform = `translate(${x * 142}%, ${y * 142}%)`; };
+  const pos = e => {
+    const r = el.getBoundingClientRect();
+    let x = (e.clientX - r.left) / r.width * 2 - 1, y = (e.clientY - r.top) / r.height * 2 - 1;
+    x = Math.max(-1, Math.min(1, x / 0.74)); y = Math.max(-1, Math.min(1, y / 0.74));
+    return [x, y];
+  };
+  el.addEventListener("pointerdown", e => { if (id !== null) return; id = e.pointerId; el.setPointerCapture(id); const [x, y] = pos(e); onMove(x, y); });
+  el.addEventListener("pointermove", e => { if (e.pointerId !== id) return; const [x, y] = pos(e); onMove(x, y); });
+  const end = e => { if (e.pointerId !== id) return; id = null; onRelease(); };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  el.addEventListener("lostpointercapture", end);
+  return set;
+}
+const setLeft = makeStick($("left"), (x, y) => {
+  sticks.yaw = x; sticks.thr = Math.max(0, Math.min(1, (1 - y) / 2));
+  store.set("wc_thr", sticks.thr.toFixed(3)); drawLeft();
+}, () => { sticks.yaw = 0; drawLeft(); });       // throttle stays where it is
+const setRight = makeStick($("right"), (x, y) => { sticks.roll = x; sticks.pitch = -y; drawRight(); },
+  () => { sticks.roll = 0; sticks.pitch = 0; drawRight(); });
+function drawLeft() { setLeft(sticks.yaw, 1 - 2 * sticks.thr); }
+function drawRight() { setRight(sticks.roll, -sticks.pitch); }
+drawLeft(); drawRight();
+
+// ---- WebSocket -----------------------------------------------------------
+function wsUrl() {
+  // ?host=IP or ?host=IP:PORT (e.g. tools/mock_drone.py), default: this page's host, port 81
+  const q = new URLSearchParams(location.search).get("host");
+  if (q && q.includes(":")) return `ws://${q}/ws`;
+  return `ws://${q || location.hostname || "192.168.43.42"}:81/ws`;
+}
+function connect() {
+  clearTimeout(reconnectTimer);
+  ready = false; infoSeen = false; wsOpen = false;
+  try { ws = new WebSocket(wsUrl()); } catch (e) { scheduleReconnect(); return; }
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    wsOpen = true; reconnectDelay = 250; lastTel = performance.now();
+    const b = new DataView(new ArrayBuffer(8));
+    b.setUint8(0, MSG_HELLO); b.setUint8(1, 1); b.setUint32(4, token, true);
+    ws.send(b.buffer);
+  };
+  ws.onmessage = ev => {
+    if (typeof ev.data === "string") { try { const j = JSON.parse(ev.data); if (j.t === "info") onInfo(j); } catch (e) {} return; }
+    if (ev.data.byteLength === TELEMETRY_LEN) onTelemetry(new DataView(ev.data));
+  };
+  ws.onclose = () => { wsOpen = false; ready = false; scheduleReconnect(); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, reconnectDelay);
+  reconnectDelay = Math.min(2000, reconnectDelay * 2);
+}
+function onInfo(j) {
+  info = j; infoSeen = true;   // the drone has processed our HELLO
+  const f = j.failsafe || {};
+  $("dinfo").textContent = `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`;
+  $("dfs").textContent = `halten bis ${f.hold} ms, gerade ausrichten bis ${f.descend} ms, Motoren aus nach ${f.off} ms; Befehle älter als ${f.stale} ms werden verworfen`;
+}
+function onTelemetry(v) {
+  // Only telemetry after the answer to HELLO tells whether our session was resumed.
+  if (v.getUint8(0) !== MSG_TELEMETRY || !infoSeen) return;
+  const t = {
+    state: v.getUint8(1), stage: v.getUint8(2), armResult: v.getUint8(3), echoSeq: v.getUint16(4, true),
+    rxRate: v.getUint16(6, true), echoMs: v.getUint32(8, true), vbat: v.getUint16(12, true) / 1000,
+    roll: v.getInt16(14, true) / 100, pitch: v.getInt16(16, true) / 100, yaw: v.getInt16(18, true) / 100,
+    thrust: v.getUint16(20, true) / 1000, stale: v.getUint16(22, true), delay: v.getUint16(24, true),
+    uptime: v.getUint32(28, true), token: v.getUint32(32, true),
+  };
+  const now = performance.now();
+  lastTel = now; tel = t;
+  const r = (ms32() - t.echoMs) >>> 0;
+  if (t.echoMs && r < 10000) rtt = rtt < 0 ? r : rtt * 0.8 + r * 0.2;
+
+  if (t.token) { token = t.token; store.set("wc_token", String(token)); }
+  const flying = (t.state & S_ARMED) && (t.state & S_YOU);
+  if (!ready) {
+    // first telemetry after (re)connect: take over the drone's view of the arm state
+    armReq = !!flying; ready = true;
+    if (resumeThr !== null) { sticks.thr = flying ? resumeThr : 0; resumeThr = null; drawLeft(); }
+  } else if (armReq && !flying && now - armSince > 600) {
+    armReq = false;
+    toast(t.armResult ? ARM_REASONS[t.armResult] :
+      (t.state & S_BLOCKED) ? "Motoren aus (Not-Aus oder Verbindungsverlust) – neu scharfschalten" : "Entschärft", "warn");
+  }
+  if (!flying && !armReq && token) { token = 0; store.set("wc_token", "0"); }
+  render();
+}
+
+// ---- send loop -----------------------------------------------------------
+function sendControl(extraFlags, force) {
+  if (!ws || !wsOpen || (!ready && !force)) return;
+  if (ws.bufferedAmount > 0 && !force) { skipped++; return; }   // never queue old commands
+  const now = performance.now();
+  let flags = extraFlags | 0;
+  if (armReq) flags |= F_ARM;
+  if (now < killUntil) flags |= F_KILL;
+  const b = new DataView(new ArrayBuffer(16));
+  b.setUint8(0, MSG_CONTROL); b.setUint8(1, flags); b.setUint16(2, seq, true); b.setUint32(4, ms32(), true);
+  b.setInt16(8, Math.round(expo(sticks.roll) * 1000), true);
+  b.setInt16(10, Math.round(expo(sticks.pitch) * 1000), true);
+  b.setInt16(12, Math.round(expo(sticks.yaw) * 1000), true);
+  b.setUint16(14, Math.round(sticks.thr * 1000), true);
+  ws.send(b.buffer);
+  seq = (seq + 1) & 0xffff; sent++;
+}
+setInterval(() => {
+  const now = performance.now();
+  if (wsOpen && now - lastTel > TELEMETRY_DEAD_MS) { try { ws.close(); } catch (e) {} }  // stalled TCP: start fresh
+  if (!paused) sendControl(0);
+}, SEND_MS);
+document.addEventListener("visibilitychange", () => {
+  paused = document.hidden;
+  if (paused) sendControl(F_PAUSE);     // drone levels out right away
+});
+window.addEventListener("pagehide", () => sendControl(F_PAUSE));
+
+// ---- buttons ---------------------------------------------------------------
+let holdTimer = 0, holdStart = 0;
+const armBtn = $("arm"), fill = armBtn.querySelector(".fill");
+armBtn.addEventListener("pointerdown", e => {
+  if (armReq) { armReq = false; render(); return; }      // disarm: one tap
+  if (sticks.thr > 0.02) { toast("Gas ganz runter zum Scharfschalten", "warn"); return; }
+  holdStart = performance.now();
+  holdTimer = setInterval(() => {
+    const p = Math.min(1, (performance.now() - holdStart) / 1000);
+    fill.style.width = (p * 100) + "%";
+    if (p >= 1) { stopHold(); armReq = true; armSince = performance.now(); buzz(40); render(); }
+  }, 30);
+});
+function stopHold() { clearInterval(holdTimer); holdTimer = 0; fill.style.width = "0"; }
+["pointerup", "pointercancel", "pointerleave"].forEach(ev => armBtn.addEventListener(ev, stopHold));
+$("kill").addEventListener("pointerdown", () => {
+  armReq = false; killUntil = performance.now() + 400; buzz([80, 40, 80]);
+  sendControl(F_KILL, true); toast("NOT-AUS gesendet", "bad");
+});
+$("info").onclick = () => { $("dlg").style.display = "flex"; };
+$("dclose").onclick = () => { $("dlg").style.display = "none"; };
+const fsBtn = $("fs");
+if (!document.documentElement.requestFullscreen) fsBtn.style.display = "none";
+fsBtn.onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape").catch(() => {})).catch(() => {});
+};
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+// ---- rendering -------------------------------------------------------------
+let toastUntil = 0;
+function toast(text, cls) { const m = $("msg"); m.textContent = text; m.className = cls; toastUntil = performance.now() + 2500; }
+function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
+let lastBuzzStage = 0;
+function batteryPercent(v) {
+  const tbl = [3.0, 3.78, 3.83, 3.87, 3.89, 3.92, 3.96, 4.0, 4.04, 4.1];
+  if (v <= tbl[0]) return 0;
+  for (let i = 1; i < tbl.length; i++) if (v < tbl[i]) return Math.round(10 * (i - 1 + (v - tbl[i - 1]) / (tbl[i] - tbl[i - 1])));
+  return 100;
+}
+function render() {
+  const now = performance.now();
+  const age = now - lastTel;
+  const live = wsOpen && tel && age < TELEMETRY_WARN_MS;
+  $("cdot").className = "dot " + (live ? (rtt < 80 ? "ok" : "warn") : (wsOpen ? "warn" : ""));
+  $("ctext").textContent = !wsOpen ? "Getrennt" : !live ? "Gestört" : `${Math.round(rtt)} ms`;
+  if (!tel) return;
+  const s = tel.state, flying = (s & S_ARMED) && (s & S_YOU);
+  $("bat").textContent = tel.vbat > 0 ? `${tel.vbat.toFixed(2)} V · ${batteryPercent(tel.vbat)} %` : "Akku –";
+  $("bat").style.color = (s & S_LOWBAT) ? "var(--bad)" : "";
+  $("state").textContent = flying ? "SCHARF" : (s & S_OTHER) ? "Fremd­steuerung" : (s & S_READY) ? "Gesperrt" : "Nicht bereit";
+  $("state").style.color = flying ? "var(--bad)" : "";
+  $("sky").style.transform = `translateY(${Math.max(-40, Math.min(40, tel.pitch)) * 1.2}%) rotate(${-tel.roll}deg)`;
+  $("stats").textContent = `R ${tel.roll.toFixed(0)}° N ${tel.pitch.toFixed(0)}° · Schub ${Math.round(tel.thrust * 100)} %\n` +
+    `Verzög. ${tel.delay} ms · verworfen ${tel.stale} · ${tel.rxRate}/s`;
+
+  const label = armBtn.querySelector("span");
+  armBtn.classList.toggle("armed", armReq);
+  if (armReq) { label.textContent = "Entschärfen"; armBtn.disabled = false; }
+  else if (!(s & S_READY)) { label.textContent = "Nicht bereit"; armBtn.disabled = true; }
+  else if (s & S_OTHER) { label.textContent = "Belegt"; armBtn.disabled = true; }
+  else { label.textContent = "Scharfschalten"; armBtn.disabled = false; }
+
+  if (now < toastUntil) return;
+  const m = $("msg");
+  let text = "", cls = "info";
+  if (!live) { text = wsOpen ? "Verbindung gestört – Drohne übernimmt nach kurzer Zeit selbst" : "Keine Verbindung – suche Drohne…"; cls = "bad"; }
+  else if (flying && tel.stage >= 1) { text = STAGES[tel.stage]; cls = tel.stage >= 2 ? "bad" : "warn"; }
+  else if (s & S_TUMBLED) { text = "Drohne liegt auf dem Kopf"; cls = "bad"; }
+  else if (s & S_LOWBAT) { text = "Akku schwach – landen"; cls = "warn"; }
+  else if (s & S_OTHER) { text = "Eine andere Steuerung fliegt gerade"; cls = "warn"; }
+  else if (!(s & S_READY)) { text = "Drohne kalibriert – bitte still hinstellen"; cls = "warn"; }
+  else if (flying) { text = "Bereit – viel Spaß"; cls = "ok"; }
+  else { text = "Gas runter, dann „Scharfschalten“ 1 s halten"; cls = "info"; }
+  m.textContent = text; m.className = cls;
+  const st = flying ? tel.stage : 0;
+  if (st >= 2 && lastBuzzStage < 2) buzz([200, 100, 200]);
+  lastBuzzStage = st;
+}
+setInterval(render, 100);
+connect();
+</script>
+</body>
+</html>

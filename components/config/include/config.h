@@ -123,6 +123,10 @@
 #define SENSORS_TASK_PRI        6
 #define STABILIZER_TASK_PRI     7
 #define KALMAN_TASK_PRI         4
+// web control (captive portal + WebSocket), all on NETWORK_TASK_CORE
+#define WEBCTRL_TASK_PRI        4
+#define WEBCTRL_HTTPD_TASK_PRI  3
+#define WEBCTRL_DNS_TASK_PRI    1
 
 // the kalman filter consumes a lot of CPU
 // for single core systems, we need to lower the priority
@@ -155,6 +159,8 @@
 #define WIFILINK_TASK_NAME      "WIFILINK"
 #define ZRANGER2_TASK_NAME      "ZRANGER2"
 #define ZRANGER_TASK_NAME       "ZRANGER"
+#define WEBCTRL_TASK_NAME       "WEBCTRL"
+#define WEBCTRL_DNS_TASK_NAME   "WEBDNS"
 
 //Task stack sizes
 #define configBASE_STACK_SIZE CONFIG_BASE_STACK_SIZE
@@ -180,6 +186,10 @@
 #define WIFILINK_TASK_STACKSIZE       (4 * configBASE_STACK_SIZE)
 #define ZRANGER2_TASK_STACKSIZE       (4 * configBASE_STACK_SIZE)
 #define ZRANGER_TASK_STACKSIZE        (2 * configBASE_STACK_SIZE)
+// web control stacks in bytes, independent of BASE_STACK_SIZE (512 on the S2)
+#define WEBCTRL_TASK_STACKSIZE        3072
+#define WEBCTRL_DNS_TASK_STACKSIZE    3072
+#define WEBCTRL_HTTPD_STACKSIZE       6144
 
 //The radio channel. From 0 to 125
 #define RADIO_RATE_2M 2

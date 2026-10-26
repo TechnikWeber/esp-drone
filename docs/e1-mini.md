@@ -53,6 +53,28 @@ From the vendor firmware's mixer: **front left and rear right spin clockwise**,
 front right and rear left counter-clockwise (seen from above). ESP-Drone's
 Crazyflie mixer expects the same, so `MOTOR_YAW_INVERT` is off.
 
+## Battery
+
+The kit usually ships without a battery. The seller's parts list names a
+"3.7V flight battery 900mAh"; packs from 800 to 1000 mAh fit as well.
+
+- **1S LiPo for RC models** (3.7 V nominal, 4.2 V full) with a high discharge
+  rate, 20C or more. The vendor warns against ordinary lithium cells: they
+  cannot deliver the motor current.
+- **At most 12 mm thick**, the height of the battery holder. The bay is open at
+  both ends and about 40 × 42 mm by the product photos, so common 900 mAh packs
+  (about 8–10 × 25–30 × 40–50 mm) fit. A rubber band from the kit holds the
+  pack.
+- **Connector PH2.0, 2 pins** (JST PH, 2.0 mm pitch), as in the parts list.
+  Molex 51005 and MX2.0 plugs look similar but do not fit.
+- **Check the polarity** before plugging in the first pack (multimeter or the
+  marking next to the socket): the parts list shows no reverse polarity
+  protection, and battery vendors do not all wire PH2.0 the same way.
+- **Charge** with the USB charger of the kit or another 1S LiPo charger. The
+  drone does not charge: its USB port only powers the ESP32 for flashing.
+- A piece of tape over the solder points in the roof of the bay protects the
+  battery pouch.
+
 ## Changes compared to ESP-Drone
 
 - **New board** `TARGET_E1_MINI` with all pins (`menuconfig` → ESPDrone Config).

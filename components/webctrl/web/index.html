@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0b0f14">
-<title>Drohnensteuerung</title>
+<title>Drone control</title>
 <!--
   ESP-Drone web control. Copyright 2026 Philipp Weber.
   Based on ESP-Drone (Espressif Systems) and the Crazyflie firmware (Bitcraze AB).
@@ -59,47 +59,43 @@ button:disabled{opacity:.45}
 <body>
 <div id="app">
   <div id="bar">
-    <span class="pill"><span id="cdot" class="dot"></span><span id="ctext">Verbinde…</span></span>
-    <span class="pill" id="bat">Akku –</span>
-    <span class="pill" id="state">Gesperrt</span>
+    <span class="pill"><span id="cdot" class="dot"></span><span id="ctext" data-t="connecting"></span></span>
+    <span class="pill" id="bat" data-t="batteryNone"></span>
+    <span class="pill" id="state" data-t="disarmed"></span>
     <span class="grow"></span>
-    <button id="trimBtn">Trimm</button>
-    <button id="fs">Vollbild</button>
-    <button id="info">Info</button>
+    <button id="trimBtn" data-t="trim"></button>
+    <button id="fs" data-t="fullscreen"></button>
+    <button id="info" data-t="info"></button>
+    <button id="lang"></button>
   </div>
-  <div id="msg" class="info">Mit dem Drohnen-WLAN verbinden…</div>
+  <div id="msg" class="info" data-t="joinWifi"></div>
   <div id="main">
-    <div class="stick" id="left"><div class="knob"></div><div class="lbl">Gas · Gieren</div></div>
+    <div class="stick" id="left"><div class="knob"></div><div class="lbl" data-t="leftStick"></div></div>
     <div id="mid">
-      <button id="arm" disabled><div class="fill"></div><span>Nicht bereit</span></button>
+      <button id="arm" disabled><div class="fill"></div><span data-t="notReady"></span></button>
       <div id="horizon"><div id="sky"></div><div id="hz-mark"></div></div>
       <div id="trim">
-        <span></span><button data-ax="p" data-d="1" aria-label="Trimm vorwärts">▲</button><span></span>
-        <button data-ax="r" data-d="-1" aria-label="Trimm links">◀</button><div id="trimVal"><span id="trimR">R 0,0°</span><span id="trimP">N 0,0°</span></div><button data-ax="r" data-d="1" aria-label="Trimm rechts">▶</button>
-        <span></span><button data-ax="p" data-d="-1" aria-label="Trimm rückwärts">▼</button><span></span>
+        <span></span><button data-ax="p" data-d="1" data-ta="trimUp">▲</button><span></span>
+        <button data-ax="r" data-d="-1" data-ta="trimLeft">◀</button><div id="trimVal"><span id="trimR"></span><span id="trimP"></span></div><button data-ax="r" data-d="1" data-ta="trimRight">▶</button>
+        <span></span><button data-ax="p" data-d="-1" data-ta="trimDown">▼</button><span></span>
       </div>
       <div id="stats">–</div>
-      <button id="kill">NOT-AUS</button>
+      <button id="kill" data-t="kill"></button>
     </div>
-    <div class="stick" id="right"><div class="knob"></div><div class="lbl">Nicken · Rollen</div></div>
+    <div class="stick" id="right"><div class="knob"></div><div class="lbl" data-t="rightStick"></div></div>
   </div>
 </div>
-<div id="rotate"><div><p style="font-size:42px;margin:0">⟳</p><p>Bitte das Handy quer halten.</p></div></div>
+<div id="rotate"><div><p style="font-size:42px;margin:0">⟳</p><p data-t="rotate"></p></div></div>
 <div id="dlg"><div class="box">
-  <h2>Drohnensteuerung</h2>
+  <h2 data-t="title"></h2>
   <p id="dinfo">–</p>
-  <p><b>Bedienung:</b> Linker Stick: hoch/runter = Gas (bleibt stehen), links/rechts = drehen. Rechter Stick: vor/zurück und seitwärts. Zum Scharfschalten Gas ganz runter und „Scharfschalten“ 1&nbsp;Sekunde halten. NOT-AUS stoppt die Motoren sofort, egal wer steuert.</p>
-  <p><b>Verbindungsverlust:</b> Kurze Aussetzer überbrückt die Drohne, danach richtet sie sich gerade aus, sinkt ab und schaltet die Motoren ab (<span id="dfs">–</span>).</p>
-  <p><b>Trimmen:</b> Driftet die Drohne beim Schweben von allein zur Seite, „Trimm“ antippen und mit den Pfeilen gegensteuern (je 0,5°, höchstens ±5°): Driftet sie nach rechts, ◀ tippen. Lange auf die Mitte drücken setzt auf 0. Die Drohne speichert die Werte selbst; im Flug darf nur der Pilot trimmen.</p>
-  <p><b>Akku:</b> <span id="dbat">–</span></p>
-  <p><b>Sicherheit:</b> Propeller können verletzen. Nur in sicherer Umgebung fliegen, Abstand zu Personen halten.</p>
-  <p><small>ESP-Drone Web Control · Copyright © 2026 Philipp Weber.
-  Basiert auf ESP-Drone (© Espressif Systems) und der Crazyflie-Firmware (© Bitcraze AB).
-  Dieses Programm ist freie Software unter der GNU General Public License Version 3 und wird
-  OHNE JEDE GEWÄHRLEISTUNG bereitgestellt. Sie dürfen es unter den Bedingungen der Lizenz
-  weitergeben und verändern. Lizenztext: https://www.gnu.org/licenses/gpl-3.0.html ·
-  Quellcode: siehe Repository des Projekts (Datei LICENSE).</small></p>
-  <p style="text-align:right"><button id="dclose">Schließen</button></p>
+  <p data-h="helpControls"></p>
+  <p><span data-h="helpLink"></span> (<span id="dfs">–</span>).</p>
+  <p data-h="helpTrim"></p>
+  <p><span data-h="helpBattery"></span> <span id="dbat">–</span></p>
+  <p data-h="helpSafety"></p>
+  <p><small data-t="license"></small></p>
+  <p style="text-align:right"><button id="dclose" data-t="close"></button></p>
 </div></div>
 <script>
 "use strict";
@@ -108,15 +104,112 @@ const PROTO = 2, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_TELEMETRY = 0
 const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
 const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
 const S2_BAT_LAND = 1, S2_BAT_NOARM = 2;
-const STOP_REASONS = ["", "Entschärft", "NOT-AUS – Motoren aus", "Verbindung verloren – Motoren aus, neu scharfschalten",
-  "Drohne lag auf dem Kopf – Motoren aus", "Akku leer – gelandet, bitte laden", "Andere Steuerung hat entschärft"];
+const STOP_BATTERY = 5;
 const TRIM_STEP = 5;   // 0.5° in 1/10°
-const STAGES = ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich gerade aus",
-  "Verbindung weg – Drohne sinkt ab", "Motoren aus"];
-const ARM_REASONS = ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, Drohne still hinstellen)", "Gas ganz runter zum Scharfschalten",
-  "Akku zu schwach", "Andere Steuerung aktiv (App/cfclient/anderes Handy)", "Drohne liegt auf dem Kopf", "Erst loslassen, dann neu scharfschalten"];
 const SEND_MS = 20, TELEMETRY_WARN_MS = 600, TELEMETRY_DEAD_MS = 2500;
 const EXPO = 0.35, DEADBAND = 0.04;
+
+// ---- texts ---------------------------------------------------------------
+// English by default, German on German phones, switchable in the bar. The page
+// translates itself because the captive portal window has no translate button.
+// Values are strings, arrays or functions; data-h texts may contain markup.
+const TEXT = {
+  en: {
+    title: "Drone control", connecting: "Connecting…", disconnected: "Disconnected", poorLink: "Poor link",
+    batteryNone: "Battery –", disarmed: "Disarmed", armedState: "ARMED", otherPilot: "Other pilot", notReady: "Not ready",
+    trim: "Trim", fullscreen: "Fullscreen", info: "Info", close: "Close", otherLang: "DE",
+    joinWifi: "Join the drone's Wi-Fi…", leftStick: "Throttle · Yaw", rightStick: "Pitch · Roll",
+    rotate: "Please hold the phone sideways.",
+    arm: "Arm", disarm: "Disarm", inUse: "In use", batteryEmpty: "Battery empty",
+    kill: "STOP", killSent: "STOP sent – motors off",
+    trimUp: "Trim forward", trimDown: "Trim backward", trimLeft: "Trim left", trimRight: "Trim right",
+    trimLimit: "Trim at its limit (±5°)", trimReset: "Trim reset to 0", roll: "R", pitch: "P",
+    stats: (s) => `R ${s.roll}° P ${s.pitch}° · thrust ${s.thrust} %\ndelay ${s.delay} ms · dropped ${s.stale} · ${s.rate}/s`,
+    stages: ["", "Short gap – holding the last command", "Link lost – drone is levelling out",
+      "Link lost – drone is descending", "Motors off"],
+    armReasons: ["", "Drone not ready (self test or calibration – keep it still)", "Throttle all the way down to arm",
+      "Battery too low", "Another controller is active (app, cfclient, other phone)", "Drone is upside down",
+      "Release first, then arm again"],
+    stopReasons: ["", "Disarmed", "STOP – motors off", "Link lost – motors off, arm again",
+      "Drone was upside down – motors off", "Battery empty – landed, please charge", "Disarmed by another controller"],
+    motorsOff: "Motors off – arm again", disarmedToast: "Disarmed",
+    msgPoorLink: "Poor link – the drone takes over shortly", msgNoLink: "No connection – looking for the drone…",
+    msgBatLand: "Battery empty – the drone is landing. Throttle down after touchdown",
+    msgTumbled: "Drone is upside down", msgBatLow: "Battery low – land soon", msgBatEmpty: "Battery empty – please charge",
+    msgOther: "Someone else is flying", msgCalibrating: "Calibrating – keep the drone still",
+    msgFlying: "Ready – have fun", msgIdle: "Throttle down, then hold “Arm” for 1 s",
+    dinfo: (j) => `${j.device || "Drone"} · firmware ${j.fw || "?"} · protocol ${j.proto} · max ${j.maxAngle}° / ${j.maxYawRate}°/s`,
+    dfs: (f) => `hold up to ${f.hold} ms, level out up to ${f.descend} ms, motors off after ${f.off} ms; ` +
+      `commands older than ${f.stale} ms are dropped`,
+    dbat: (b, volt) => (b.land ? `If the voltage drops below ${volt(b.land)} in flight, the drone lands by itself: ` +
+      `you keep steering, but the thrust goes down to zero within ${Math.round(b.landTime / 1000)} s. ` +
+      "Throttle down after touchdown." : "Automatic landing is switched off.") +
+      (b.arm ? ` Below ${volt(b.arm)} it cannot be armed.` : ""),
+    helpControls: "<b>Controls:</b> Left stick: up/down = throttle (stays where you leave it), left/right = turn. " +
+      "Right stick: forward/back and sideways. To arm, pull the throttle all the way down and hold “Arm” for " +
+      "1&nbsp;second. STOP turns the motors off at once, no matter who is flying.",
+    helpLink: "<b>Link loss:</b> The drone bridges short gaps; after that it levels out, descends and turns the motors off",
+    helpTrim: "<b>Trim:</b> If the drone drifts sideways by itself while hovering, tap “Trim” and correct with the " +
+      "arrows (0.5° per tap, up to ±5°): if it drifts to the right, tap ◀. A long press on the middle resets to 0. " +
+      "The drone stores the values; in flight only the pilot may trim.",
+    helpBattery: "<b>Battery:</b>",
+    helpSafety: "<b>Safety:</b> Propellers can injure. Only fly in a safe place and keep away from people.",
+    license: "ESP-Drone web control · Copyright © 2026 Philipp Weber. Based on ESP-Drone (© Espressif Systems) " +
+      "and the Crazyflie firmware (© Bitcraze AB). This program is free software under the GNU General Public " +
+      "License version 3 and comes WITHOUT ANY WARRANTY. You may redistribute and modify it under the terms of " +
+      "the license. License text: https://www.gnu.org/licenses/gpl-3.0.html · Source code: see the project's " +
+      "repository (file LICENSE).",
+  },
+  de: {
+    title: "Drohnensteuerung", connecting: "Verbinde…", disconnected: "Getrennt", poorLink: "Gestört",
+    batteryNone: "Akku –", disarmed: "Gesperrt", armedState: "SCHARF", otherPilot: "Fremd­steuerung", notReady: "Nicht bereit",
+    trim: "Trimm", fullscreen: "Vollbild", info: "Info", close: "Schließen", otherLang: "EN",
+    joinWifi: "Mit dem Drohnen-WLAN verbinden…", leftStick: "Gas · Gieren", rightStick: "Nicken · Rollen",
+    rotate: "Bitte das Handy quer halten.",
+    arm: "Scharfschalten", disarm: "Entschärfen", inUse: "Belegt", batteryEmpty: "Akku leer",
+    kill: "NOT-AUS", killSent: "NOT-AUS gesendet",
+    trimUp: "Trimm vorwärts", trimDown: "Trimm rückwärts", trimLeft: "Trimm links", trimRight: "Trimm rechts",
+    trimLimit: "Trimmung am Anschlag (±5°)", trimReset: "Trimmung auf 0 gesetzt", roll: "R", pitch: "N",
+    stats: (s) => `R ${s.roll}° N ${s.pitch}° · Schub ${s.thrust} %\nVerzög. ${s.delay} ms · verworfen ${s.stale} · ${s.rate}/s`,
+    stages: ["", "Aussetzer – letzter Befehl wird gehalten", "Verbindung weg – Drohne richtet sich gerade aus",
+      "Verbindung weg – Drohne sinkt ab", "Motoren aus"],
+    armReasons: ["", "Drohne nicht bereit (Selbsttest/Kalibrierung, Drohne still hinstellen)",
+      "Gas ganz runter zum Scharfschalten", "Akku zu schwach", "Andere Steuerung aktiv (App/cfclient/anderes Handy)",
+      "Drohne liegt auf dem Kopf", "Erst loslassen, dann neu scharfschalten"],
+    stopReasons: ["", "Entschärft", "NOT-AUS – Motoren aus", "Verbindung verloren – Motoren aus, neu scharfschalten",
+      "Drohne lag auf dem Kopf – Motoren aus", "Akku leer – gelandet, bitte laden", "Andere Steuerung hat entschärft"],
+    motorsOff: "Motoren aus – neu scharfschalten", disarmedToast: "Entschärft",
+    msgPoorLink: "Verbindung gestört – Drohne übernimmt nach kurzer Zeit selbst",
+    msgNoLink: "Keine Verbindung – suche Drohne…",
+    msgBatLand: "Akku leer – Drohne landet. Nach dem Aufsetzen Gas ganz runter",
+    msgTumbled: "Drohne liegt auf dem Kopf", msgBatLow: "Akku schwach – bitte bald landen",
+    msgBatEmpty: "Akku leer – bitte laden", msgOther: "Eine andere Steuerung fliegt gerade",
+    msgCalibrating: "Drohne kalibriert – bitte still hinstellen", msgFlying: "Bereit – viel Spaß",
+    msgIdle: "Gas runter, dann „Scharfschalten“ 1 s halten",
+    dinfo: (j) => `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`,
+    dfs: (f) => `halten bis ${f.hold} ms, gerade ausrichten bis ${f.descend} ms, Motoren aus nach ${f.off} ms; ` +
+      `Befehle älter als ${f.stale} ms werden verworfen`,
+    dbat: (b, volt) => (b.land ? `Fällt die Spannung im Flug unter ${volt(b.land)}, landet die Drohne von selbst: ` +
+      `Du lenkst weiter, aber der Schub sinkt in ${Math.round(b.landTime / 1000)} s auf null. ` +
+      "Nach dem Aufsetzen Gas ganz runter." : "Automatisches Landen ist abgeschaltet.") +
+      (b.arm ? ` Unter ${volt(b.arm)} lässt sie sich nicht scharfschalten.` : ""),
+    helpControls: "<b>Bedienung:</b> Linker Stick: hoch/runter = Gas (bleibt stehen), links/rechts = drehen. " +
+      "Rechter Stick: vor/zurück und seitwärts. Zum Scharfschalten Gas ganz runter und „Scharfschalten“ " +
+      "1&nbsp;Sekunde halten. NOT-AUS stoppt die Motoren sofort, egal wer steuert.",
+    helpLink: "<b>Verbindungsverlust:</b> Kurze Aussetzer überbrückt die Drohne, danach richtet sie sich gerade aus, " +
+      "sinkt ab und schaltet die Motoren ab",
+    helpTrim: "<b>Trimmen:</b> Driftet die Drohne beim Schweben von allein zur Seite, „Trimm“ antippen und mit den " +
+      "Pfeilen gegensteuern (je 0,5°, höchstens ±5°): Driftet sie nach rechts, ◀ tippen. Lange auf die Mitte " +
+      "drücken setzt auf 0. Die Drohne speichert die Werte selbst; im Flug darf nur der Pilot trimmen.",
+    helpBattery: "<b>Akku:</b>",
+    helpSafety: "<b>Sicherheit:</b> Propeller können verletzen. Nur in sicherer Umgebung fliegen, Abstand zu Personen halten.",
+    license: "ESP-Drone Web Control · Copyright © 2026 Philipp Weber. Basiert auf ESP-Drone (© Espressif Systems) " +
+      "und der Crazyflie-Firmware (© Bitcraze AB). Dieses Programm ist freie Software unter der GNU General Public " +
+      "License Version 3 und wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt. Sie dürfen es unter den Bedingungen der " +
+      "Lizenz weitergeben und verändern. Lizenztext: https://www.gnu.org/licenses/gpl-3.0.html · Quellcode: siehe " +
+      "Repository des Projekts (Datei LICENSE).",
+  },
+};
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -124,6 +217,16 @@ const store = {
   set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} },
 };
 const ms32 = () => (Math.floor(performance.now()) >>> 0);
+
+function pickLang() {
+  const q = new URLSearchParams(location.search).get("lang");
+  if (TEXT[q]) return q;
+  try { const s = localStorage.getItem("wc_lang"); if (TEXT[s]) return s; } catch (e) {}
+  return (navigator.language || "").toLowerCase().startsWith("de") ? "de" : "en";
+}
+let lang = pickLang();
+const t = k => (k in TEXT[lang]) ? TEXT[lang][k] : TEXT.en[k];
+const num = (v, digits) => { const s = v.toFixed(digits); return lang === "de" ? s.replace(".", ",") : s; };
 
 // ---- state ---------------------------------------------------------------
 let ws = null, wsOpen = false, ready = false, infoSeen = false, reconnectDelay = 250, reconnectTimer = 0;
@@ -205,18 +308,19 @@ function scheduleReconnect() {
 }
 function onInfo(j) {
   info = j; infoSeen = true;   // the drone has processed our HELLO
-  const f = j.failsafe || {};
-  $("dinfo").textContent = `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`;
-  $("dfs").textContent = `halten bis ${f.hold} ms, gerade ausrichten bis ${f.descend} ms, Motoren aus nach ${f.off} ms; Befehle älter als ${f.stale} ms werden verworfen`;
-  const b = j.battery || {}, volt = mv => (mv / 1000).toFixed(1).replace(".", ",") + " V";
-  $("dbat").textContent = (b.land ? `Fällt die Spannung im Flug unter ${volt(b.land)}, landet die Drohne von selbst: Du lenkst weiter, ` +
-    `aber der Schub sinkt in ${Math.round(b.landTime / 1000)} s auf null. Nach dem Aufsetzen Gas ganz runter.` : "Automatisches Landen ist abgeschaltet.") +
-    (b.arm ? ` Unter ${volt(b.arm)} lässt sie sich nicht scharfschalten.` : "");
+  renderInfo();
+}
+function renderInfo() {
+  if (!info) return;
+  const volt = mv => num(mv / 1000, 1) + " V";
+  $("dinfo").textContent = t("dinfo")(info);
+  $("dfs").textContent = t("dfs")(info.failsafe || {});
+  $("dbat").textContent = t("dbat")(info.battery || {}, volt);
 }
 function onTelemetry(v) {
   // Only telemetry after the answer to HELLO tells whether our session was resumed.
   if (v.getUint8(0) !== MSG_TELEMETRY || !infoSeen) return;
-  const t = {
+  const tm = {
     state: v.getUint8(1), stage: v.getUint8(2), armResult: v.getUint8(3), echoSeq: v.getUint16(4, true),
     rxRate: v.getUint16(6, true), echoMs: v.getUint32(8, true), vbat: v.getUint16(12, true) / 1000,
     roll: v.getInt16(14, true) / 100, pitch: v.getInt16(16, true) / 100, yaw: v.getInt16(18, true) / 100,
@@ -226,16 +330,16 @@ function onTelemetry(v) {
   };
   const now = performance.now();
   const wasFlying = !!(tel && (tel.state & S_ARMED) && (tel.state & S_YOU));
-  lastTel = now; tel = t;
-  const r = (ms32() - t.echoMs) >>> 0;
-  if (t.echoMs && r < 10000) rtt = rtt < 0 ? r : rtt * 0.8 + r * 0.2;
+  lastTel = now; tel = tm;
+  const r = (ms32() - tm.echoMs) >>> 0;
+  if (tm.echoMs && r < 10000) rtt = rtt < 0 ? r : rtt * 0.8 + r * 0.2;
 
-  if (t.token) { token = t.token; store.set("wc_token", String(token)); }
-  const flying = (t.state & S_ARMED) && (t.state & S_YOU);
+  if (tm.token) { token = tm.token; store.set("wc_token", String(token)); }
+  const flying = (tm.state & S_ARMED) && (tm.state & S_YOU);
   // Why the drone stopped. After a stop the drone also answers "release ARM
   // first" to our ARM flag, so the stop reason wins when we were flying.
-  const stopText = (t.stopReason > 1 && STOP_REASONS[t.stopReason]) || "";
-  const stopCls = t.stopReason === 5 ? "bad" : "warn";
+  const stopText = (tm.stopReason > 1 && t("stopReasons")[tm.stopReason]) || "";
+  const stopCls = tm.stopReason === STOP_BATTERY ? "bad" : "warn";
   if (!ready) {
     // first telemetry after (re)connect: take over the drone's view of the arm state
     if (armReq && !flying && stopText) toast(stopText, stopCls);
@@ -244,8 +348,8 @@ function onTelemetry(v) {
   } else if (armReq && !flying && now - armSince > 600) {
     armReq = false;
     if (wasFlying && stopText) toast(stopText, stopCls);
-    else if (t.armResult) toast(ARM_REASONS[t.armResult], "warn");
-    else toast((t.state & S_BLOCKED) ? "Motoren aus – neu scharfschalten" : "Entschärft", "warn");
+    else if (tm.armResult) toast(t("armReasons")[tm.armResult], "warn");
+    else toast((tm.state & S_BLOCKED) ? t("motorsOff") : t("disarmedToast"), "warn");
   }
   if (!flying && !armReq && token) { token = 0; store.set("wc_token", "0"); }
   render();
@@ -284,7 +388,7 @@ let holdTimer = 0, holdStart = 0;
 const armBtn = $("arm"), fill = armBtn.querySelector(".fill");
 armBtn.addEventListener("pointerdown", e => {
   if (armReq) { armReq = false; render(); return; }      // disarm: one tap
-  if (sticks.thr > 0.02) { toast("Gas ganz runter zum Scharfschalten", "warn"); return; }
+  if (sticks.thr > 0.02) { toast(t("armReasons")[2], "warn"); return; }
   holdStart = performance.now();
   holdTimer = setInterval(() => {
     const p = Math.min(1, (performance.now() - holdStart) / 1000);
@@ -296,7 +400,7 @@ function stopHold() { clearInterval(holdTimer); holdTimer = 0; fill.style.width 
 ["pointerup", "pointercancel", "pointerleave"].forEach(ev => armBtn.addEventListener(ev, stopHold));
 $("kill").addEventListener("pointerdown", () => {
   armReq = false; killUntil = performance.now() + 400; buzz([80, 40, 80]);
-  sendControl(F_KILL, true); toast("NOT-AUS gesendet", "bad");
+  sendControl(F_KILL, true); toast(t("killSent"), "bad");
 });
 // ---- trim (stored on the drone, shown from the telemetry) -----------------
 let trimShown = null, trimPendingUntil = 0, trimResetTimer = 0;
@@ -321,13 +425,13 @@ document.querySelectorAll("#trim button").forEach(btn => btn.addEventListener("p
   const cur = trimNow(), max = (info && info.trimMax) || 50, d = Number(btn.dataset.d) * TRIM_STEP;
   const r = btn.dataset.ax === "r" ? Math.max(-max, Math.min(max, cur.r + d)) : cur.r;
   const p = btn.dataset.ax === "p" ? Math.max(-max, Math.min(max, cur.p + d)) : cur.p;
-  if (r === cur.r && p === cur.p) { buzz(60); toast("Trimmung am Anschlag (±5°)", "warn"); return; }
+  if (r === cur.r && p === cur.p) { buzz(60); toast(t("trimLimit"), "warn"); return; }
   if (sendTrim(r, p)) buzz(15);
 }));
 const trimVal = $("trimVal");
 trimVal.addEventListener("pointerdown", () => {
   clearTimeout(trimResetTimer);
-  trimResetTimer = setTimeout(() => { if (sendTrim(0, 0)) { buzz(40); toast("Trimmung auf 0 gesetzt", "info"); } }, 800);
+  trimResetTimer = setTimeout(() => { if (sendTrim(0, 0)) { buzz(40); toast(t("trimReset"), "info"); } }, 800);
 });
 ["pointerup", "pointercancel", "pointerleave"].forEach(ev => trimVal.addEventListener(ev, () => clearTimeout(trimResetTimer)));
 $("trimBtn").onclick = () => {
@@ -335,14 +439,14 @@ $("trimBtn").onclick = () => {
   $("trimBtn").classList.toggle("on", on);
   renderTrim();
 };
-function fmtTrim(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + (Math.abs(v) / 10).toFixed(1).replace(".", ",") + "°"; }
+function fmtTrim(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + num(Math.abs(v) / 10, 1) + "°"; }
 function renderTrim() {
-  const t = trimNow(), set = t.r !== 0 || t.p !== 0, ok = trimAllowed();
-  $("trimR").textContent = "R " + fmtTrim(t.r);
-  $("trimP").textContent = "N " + fmtTrim(t.p);
+  const tr = trimNow(), set = tr.r !== 0 || tr.p !== 0, ok = trimAllowed();
+  $("trimR").textContent = t("roll") + " " + fmtTrim(tr.r);
+  $("trimP").textContent = t("pitch") + " " + fmtTrim(tr.p);
   trimVal.classList.toggle("set", set);
   document.querySelectorAll("#trim button").forEach(b => { b.disabled = !ok; });
-  $("trimBtn").textContent = set ? "Trimm •" : "Trimm";
+  $("trimBtn").textContent = t("trim") + (set ? " •" : "");
 }
 
 $("info").onclick = () => { $("dlg").style.display = "flex"; };
@@ -353,9 +457,25 @@ fsBtn.onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen().then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape").catch(() => {})).catch(() => {});
 };
+$("lang").onclick = () => {
+  lang = lang === "de" ? "en" : "de";
+  try { localStorage.setItem("wc_lang", lang); } catch (e) {}
+  applyLang();
+};
 document.addEventListener("contextmenu", e => e.preventDefault());
 
 // ---- rendering -------------------------------------------------------------
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelectorAll("[data-t]").forEach(el => { el.textContent = t(el.dataset.t); });
+  document.querySelectorAll("[data-h]").forEach(el => { el.innerHTML = t(el.dataset.h); });  // own texts only
+  document.querySelectorAll("[data-ta]").forEach(el => { el.setAttribute("aria-label", t(el.dataset.ta)); });
+  $("lang").textContent = t("otherLang");
+  toastUntil = 0;
+  renderInfo();
+  render();
+}
 let toastUntil = 0;
 function toast(text, cls) { const m = $("msg"); m.textContent = text; m.className = cls; toastUntil = performance.now() + 2500; }
 function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
@@ -371,25 +491,25 @@ function render() {
   const age = now - lastTel;
   const live = wsOpen && tel && age < TELEMETRY_WARN_MS;
   $("cdot").className = "dot " + (live ? (rtt < 80 ? "ok" : "warn") : (wsOpen ? "warn" : ""));
-  $("ctext").textContent = !wsOpen ? "Getrennt" : !live ? "Gestört" : `${Math.round(rtt)} ms`;
+  $("ctext").textContent = !wsOpen ? t("disconnected") : !live ? t("poorLink") : `${Math.round(rtt)} ms`;
   renderTrim();
   if (!tel) return;
   const s = tel.state, s2 = tel.state2, flying = (s & S_ARMED) && (s & S_YOU);
-  $("bat").textContent = tel.vbat > 0 ? `${tel.vbat.toFixed(2)} V · ${batteryPercent(tel.vbat)} %` : "Akku –";
+  $("bat").textContent = tel.vbat > 0 ? `${num(tel.vbat, 2)} V · ${batteryPercent(tel.vbat)} %` : t("batteryNone");
   $("bat").style.color = ((s & S_LOWBAT) || (s2 & (S2_BAT_LAND | S2_BAT_NOARM))) ? "var(--bad)" : "";
-  $("state").textContent = flying ? "SCHARF" : (s & S_OTHER) ? "Fremd­steuerung" : (s & S_READY) ? "Gesperrt" : "Nicht bereit";
+  $("state").textContent = flying ? t("armedState") : (s & S_OTHER) ? t("otherPilot") : (s & S_READY) ? t("disarmed") : t("notReady");
   $("state").style.color = flying ? "var(--bad)" : "";
   $("sky").style.transform = `translateY(${Math.max(-40, Math.min(40, tel.pitch)) * 1.2}%) rotate(${-tel.roll}deg)`;
-  $("stats").textContent = `R ${tel.roll.toFixed(0)}° N ${tel.pitch.toFixed(0)}° · Schub ${Math.round(tel.thrust * 100)} %\n` +
-    `Verzög. ${tel.delay} ms · verworfen ${tel.stale} · ${tel.rxRate}/s`;
+  $("stats").textContent = t("stats")({ roll: tel.roll.toFixed(0), pitch: tel.pitch.toFixed(0), thrust: Math.round(tel.thrust * 100),
+    delay: tel.delay, stale: tel.stale, rate: tel.rxRate });
 
   const label = armBtn.querySelector("span");
   armBtn.classList.toggle("armed", armReq);
-  if (armReq) { label.textContent = "Entschärfen"; armBtn.disabled = false; }
-  else if (!(s & S_READY)) { label.textContent = "Nicht bereit"; armBtn.disabled = true; }
-  else if (s & S_OTHER) { label.textContent = "Belegt"; armBtn.disabled = true; }
-  else if (s2 & S2_BAT_NOARM) { label.textContent = "Akku leer"; armBtn.disabled = true; }
-  else { label.textContent = "Scharfschalten"; armBtn.disabled = false; }
+  if (armReq) { label.textContent = t("disarm"); armBtn.disabled = false; }
+  else if (!(s & S_READY)) { label.textContent = t("notReady"); armBtn.disabled = true; }
+  else if (s & S_OTHER) { label.textContent = t("inUse"); armBtn.disabled = true; }
+  else if (s2 & S2_BAT_NOARM) { label.textContent = t("batteryEmpty"); armBtn.disabled = true; }
+  else { label.textContent = t("arm"); armBtn.disabled = false; }
 
   const batLand = !!(flying && (s2 & S2_BAT_LAND));
   if (batLand && !lastBatLand) buzz([300, 100, 300, 100, 300]);
@@ -397,21 +517,22 @@ function render() {
   if (now < toastUntil) return;
   const m = $("msg");
   let text = "", cls = "info";
-  if (!live) { text = wsOpen ? "Verbindung gestört – Drohne übernimmt nach kurzer Zeit selbst" : "Keine Verbindung – suche Drohne…"; cls = "bad"; }
-  else if (flying && tel.stage >= 1) { text = STAGES[tel.stage]; cls = tel.stage >= 2 ? "bad" : "warn"; }
-  else if (batLand) { text = "Akku leer – Drohne landet. Nach dem Aufsetzen Gas ganz runter"; cls = "bad"; }
-  else if (s & S_TUMBLED) { text = "Drohne liegt auf dem Kopf"; cls = "bad"; }
-  else if (flying && (s & S_LOWBAT)) { text = "Akku schwach – bitte bald landen"; cls = "warn"; }
-  else if (!flying && ((s2 & S2_BAT_NOARM) || (s & S_LOWBAT))) { text = "Akku leer – bitte laden"; cls = "warn"; }
-  else if (s & S_OTHER) { text = "Eine andere Steuerung fliegt gerade"; cls = "warn"; }
-  else if (!(s & S_READY)) { text = "Drohne kalibriert – bitte still hinstellen"; cls = "warn"; }
-  else if (flying) { text = "Bereit – viel Spaß"; cls = "ok"; }
-  else { text = "Gas runter, dann „Scharfschalten“ 1 s halten"; cls = "info"; }
+  if (!live) { text = wsOpen ? t("msgPoorLink") : t("msgNoLink"); cls = "bad"; }
+  else if (flying && tel.stage >= 1) { text = t("stages")[tel.stage]; cls = tel.stage >= 2 ? "bad" : "warn"; }
+  else if (batLand) { text = t("msgBatLand"); cls = "bad"; }
+  else if (s & S_TUMBLED) { text = t("msgTumbled"); cls = "bad"; }
+  else if (flying && (s & S_LOWBAT)) { text = t("msgBatLow"); cls = "warn"; }
+  else if (!flying && ((s2 & S2_BAT_NOARM) || (s & S_LOWBAT))) { text = t("msgBatEmpty"); cls = "warn"; }
+  else if (s & S_OTHER) { text = t("msgOther"); cls = "warn"; }
+  else if (!(s & S_READY)) { text = t("msgCalibrating"); cls = "warn"; }
+  else if (flying) { text = t("msgFlying"); cls = "ok"; }
+  else { text = t("msgIdle"); cls = "info"; }
   m.textContent = text; m.className = cls;
   const st = flying ? tel.stage : 0;
   if (st >= 2 && lastBuzzStage < 2) buzz([200, 100, 200]);
   lastBuzzStage = st;
 }
+applyLang();
 setInterval(render, 100);
 connect();
 </script>

@@ -214,6 +214,10 @@ only from the pilot, and reports the valid values back in the telemetry.
   stall of 450 ms every 6 s. With `--vbat 3.45 --drain 0.02` the simulated
   battery starts nearly empty: after about 10 s of hovering the forced landing
   begins. `&lang=de` or `&lang=en` in the address picks the language.
+- **Screenshots** for the README: `python3 tools/ui_screenshots.py` drives the
+  page in headless Google Chrome against the simulated drone and rewrites
+  `docs/images/webcontrol-*.png` (ImageMagick makes them smaller, if
+  installed).
 
 ## Limits
 

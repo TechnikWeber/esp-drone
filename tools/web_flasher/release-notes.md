@@ -36,6 +36,9 @@ From the box to the first hover:
   controller at 100 Hz, controller gains changeable in flight and stored on the drone, step test,
   motor test for the bench, flight recorder with CSV export. Guide:
   [docs/groundstation.md](https://github.com/{{REPO}}/blob/webcontrol/docs/groundstation.md).
+- **Flips (experimental, hidden by default):** switch them on in the Info dialog of the phone page
+  or in the ground station; the drone flies the flip by itself. Needs 2 m of height and room.
+  [How it works](https://github.com/{{REPO}}/blob/webcontrol/docs/webcontrol.md#flips-experimental).
 - Board support for the E1 Mini (ESP32 DevKit, MPU6500 on SPI, 8520 motors) with controller
   gains from the vendor firmware.
 - Based on espressif/esp-drone `master@9d5a4f8`, built with ESP-IDF 5.5.

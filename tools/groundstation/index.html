@@ -76,6 +76,14 @@ kbd{display:inline-block;min-width:1.6em;padding:0 5px;border:1px solid var(--li
 #trimPad button{padding:0;font-size:12px;border-radius:6px}
 #trimVals{font-size:13px;font-variant-numeric:tabular-nums}
 #trimVals.set b{color:var(--yellow)}
+#flipCard{display:none}
+body.flips #hz{max-width:210px;margin:0 auto}
+#flipBtns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+#flipBtns button{padding:7px 0;font-size:15px}
+#flipTable input{width:84px;padding:3px 6px;text-align:right}
+#flipTable input.changed{border-color:var(--yellow);color:var(--yellow)}
+#flipTable input.pending{border-color:var(--accent)}
+#flipTable td{padding:2px 4px;font-size:13px;color:#c8d1db}
 
 /* plots */
 #plotCard{flex:1;display:flex;flex-direction:column;min-height:0;padding-bottom:6px}
@@ -182,6 +190,13 @@ dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
         <button id="arm" disabled><div class="fill"></div><span data-t="notReady"></span><small id="armHint"></small></button>
         <button id="kill"><span data-t="kill"></span><small id="killHint"></small></button>
       </div>
+      <div class="card" id="flipCard">
+        <h3><span data-t="flipTitle"></span><span class="grow"></span><span id="flipCardNote" class="faint" style="text-transform:none;letter-spacing:0"></span></h3>
+        <div id="flipBtns">
+          <button data-flip="2" data-ta="aFlipLeft">◀</button><button data-flip="0" data-ta="aFlipForward">▲</button>
+          <button data-flip="1" data-ta="aFlipBack">▼</button><button data-flip="3" data-ta="aFlipRight">▶</button>
+        </div>
+      </div>
       <div class="card">
         <h3><span data-t="pilotInput"></span><span class="grow"></span><span id="ratesPill" class="num"></span></h3>
         <canvas id="sticks" width="268" height="118"></canvas>
@@ -202,6 +217,7 @@ dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
           </div>
         </div>
       </div>
+
     </div>
 
     <div class="col" id="center">
@@ -258,6 +274,9 @@ dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
           <div class="row"><label><input type="checkbox" id="setBlurPause"> <span data-t="blurPause"></span></label></div>
           <div class="row"><label><input type="checkbox" id="setKeyboard"> <span data-t="keyboardFly"></span></label></div>
           <div class="note" data-h="keyboardHelp"></div>
+          <h4 data-t="experimental"></h4>
+          <div class="row"><label><input type="checkbox" id="setFlips"> <span data-t="flipsSetting"></span></label></div>
+          <div class="note" data-t="flipsWarn"></div>
         </div>
 
         <!-- tuning -->
@@ -279,6 +298,11 @@ dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
           <div class="row"><label data-t="stepAmp"></label><input type="range" id="stepDeg" min="2" max="10" step="1" style="width:140px"><span class="val" id="vStepDeg"></span></div>
           <div class="row"><label><input type="checkbox" id="stepHoldBox"> <span data-t="stepHold"></span></label></div>
           <div class="note" id="stepHelp"></div>
+          <div id="flipParams" style="display:none">
+            <h4 data-t="flipParamsTitle"></h4>
+            <table id="flipTable"></table>
+            <div class="note" id="flipParamsNote"></div>
+          </div>
           <h4 data-t="tuneHowTitle"></h4>
           <div class="note" data-h="tuneHow"></div>
         </div>
@@ -327,12 +351,12 @@ dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums}
 <script>
 "use strict";
 // ===== protocol (docs/webcontrol.md) =========================================
-const PROTO = 3;
-const MSG = { CONTROL: 0x01, HELLO: 0x02, TRIM: 0x03, PARAM: 0x04, STREAM: 0x05, MOTOR_TEST: 0x06,
-  TELEMETRY: 0x81, FAST: 0x82, PARAM_REPLY: 0x84, MOTOR_REPLY: 0x86 };
+const PROTO = 4;
+const MSG = { CONTROL: 0x01, HELLO: 0x02, TRIM: 0x03, PARAM: 0x04, STREAM: 0x05, MOTOR_TEST: 0x06, FLIP: 0x07,
+  TELEMETRY: 0x81, FAST: 0x82, PARAM_REPLY: 0x84, MOTOR_REPLY: 0x86, FLIP_REPLY: 0x87 };
 const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
 const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
-const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4;
+const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4, S2_FLIP = 8;
 const STOP_BATTERY = 5;
 const P_READ = 0, P_WRITE = 1, P_SAVE = 2, P_RESET = 3;
 const PF_WRITABLE = 1, PF_STORED = 2;
@@ -342,6 +366,14 @@ const ARM_HOLD_MS = 1000, LEVEL_HOLD_MS = 1500, TRIM_STEP = 5;
 const LOOPS = ["rate", "attitude"], AXES = ["roll", "pitch", "yaw"], TERMS = ["kp", "ki", "kd"];
 const GAIN_NAMES = [];
 for (const l of LOOPS) for (const a of AXES) for (const k of TERMS) GAIN_NAMES.push(`pid_${l}.${a}_${k}`);
+// Flip parameters (firmware group "flip", protocol 4), ranges as in the firmware
+const FLIP_PARAMS = [
+  { name: "flip.rate", min: 360, max: 2000 }, { name: "flip.boostMs", min: 0, max: 600 },
+  { name: "flip.boost", min: 100, max: 250 }, { name: "flip.spin", min: 10, max: 150 },
+  { name: "flip.exitDeg", min: 10, max: 120 }, { name: "flip.recoverMs", min: 0, max: 1000 },
+  { name: "flip.recover", min: 50, max: 250 }, { name: "flip.timeoutMs", min: 300, max: 1500 },
+];
+const FLIP_DIRS = ["forward", "back", "left", "right"];
 // Motor layout of ESP-Drone (power_distribution_stock.c, X frame), seen from above
 const MOTORS = [
   { x: 222, y: 78, dir: "ccw" },   // M1 front right
@@ -415,6 +447,22 @@ const TEXT = {
     stepHelp: (r, p) => `While hovering: the drone tilts to one side and back (0.3 s each), the plots then hold the ` +
       `response and show the previous test in grey for comparison. Any stick movement cancels it. Gamepad: ${r} roll, ${p} pitch.`,
     stepNotFlying: "Step test only in flight (hover first)", evStep: (a, d) => `Step test ${a} ±${d}°`,
+    experimental: "Experimental", flipsSetting: "Flips",
+    flipsWarn: "The drone flies the flip by itself: it climbs, turns over and catches itself. Without an altitude " +
+      "sensor it may lose height: only at 2 m or higher, with plenty of room around. Not tested on real hardware yet.",
+    flipTitle: "Flip (experimental)", flipDirs: { forward: "forward", back: "backward", left: "left", right: "right" },
+    flipHintShort: (b) => `${b} + stick`, flipGo: (d) => `Flip ${d}`,
+    flipNoDir: "Push the stick in the direction of the flip", flipNeedsV4: "Flips need firmware v0.4.0 or newer.",
+    flipOff: "Flips are switched off in this firmware.", msgFlip: "Flip…",
+    flipReasons: ["", "Flips are switched off in this firmware", "Only the pilot can flip",
+      "Hover for a few seconds first, then flip at hover throttle", "Not now (link, battery or a flip still running)"],
+    aFlip: "Flip (stick gives the direction)", aFlipLeft: "Flip left", aFlipRight: "Flip right",
+    aFlipForward: "Flip forward", aFlipBack: "Flip backward",
+    flipParamsTitle: "Flip (experimental)",
+    flipParamLabels: ["Rotation °/s", "Climb ms", "Climb thrust % hover", "Spin thrust % hover", "Level from ° before upright",
+      "Catch ms", "Catch thrust % hover", "Longest rotation ms"],
+    flipParamsHelp: "Too much height lost: more climb thrust or time, less spin thrust. Does not turn over: higher " +
+      "rotation rate. Overshoots after the flip: level out earlier (more degrees).",
     stepHeld: "Step response held – press Live to go on", sPrev: "previous test",
     hoverEst: (p) => `hover ≈ ${p} %`, hoverFit: "Hover at mid-stick", hoverNone: "Hover for a few seconds first",
     hoverDone: (lo, hi) => `Throttle: lowest ${lo} %, highest ${hi} %: hovering is now at mid-stick`,
@@ -554,6 +602,22 @@ const TEXT = {
     stepHelp: (r, p) => `Im Schwebeflug: Die Drohne kippt kurz zur einen Seite und zurück (je 0,3 s), danach halten die ` +
       `Kurven die Antwort fest und zeigen den vorigen Test grau zum Vergleich. Jede Stickbewegung bricht ab. Gamepad: ${r} Rollen, ${p} Nicken.`,
     stepNotFlying: "Sprungtest nur im Flug (erst schweben)", evStep: (a, d) => `Sprungtest ${a} ±${d}°`,
+    experimental: "Experimentell", flipsSetting: "Flips",
+    flipsWarn: "Die Drohne fliegt den Flip selbst: Sie steigt, überschlägt sich und fängt sich wieder. Ohne Höhensensor " +
+      "kann sie dabei Höhe verlieren: nur ab 2 m Höhe und mit viel Platz ringsum. Noch nicht auf echter Hardware getestet.",
+    flipTitle: "Flip (experimentell)", flipDirs: { forward: "vorwärts", back: "rückwärts", left: "links", right: "rechts" },
+    flipHintShort: (b) => `${b} + Stick`, flipGo: (d) => `Flip ${d}`,
+    flipNoDir: "Stick in Flip-Richtung drücken", flipNeedsV4: "Flips brauchen Firmware v0.4.0 oder neuer.",
+    flipOff: "Flips sind in dieser Firmware abgeschaltet.", msgFlip: "Flip…",
+    flipReasons: ["", "Flips sind in dieser Firmware abgeschaltet", "Nur der Pilot kann flippen",
+      "Erst ein paar Sekunden schweben, dann mit Schwebe-Gas flippen", "Gerade nicht (Verbindung, Akku oder Flip läuft noch)"],
+    aFlip: "Flip (Stick gibt die Richtung)", aFlipLeft: "Flip links", aFlipRight: "Flip rechts",
+    aFlipForward: "Flip vorwärts", aFlipBack: "Flip rückwärts",
+    flipParamsTitle: "Flip (experimentell)",
+    flipParamLabels: ["Drehrate °/s", "Steigen ms", "Steigschub % Schweben", "Drehschub % Schweben", "Ausrichten ab ° vor aufrecht",
+      "Abfangen ms", "Abfangschub % Schweben", "Längste Drehung ms"],
+    flipParamsHelp: "Verliert zu viel Höhe: mehr Steigschub oder -zeit, weniger Drehschub. Dreht nicht ganz herum: " +
+      "höhere Drehrate. Schwingt nach dem Flip über: früher ausrichten (mehr Grad).",
     stepHeld: "Sprungantwort angehalten – mit Live geht es weiter", sPrev: "voriger Test",
     hoverEst: (p) => `Schweben ≈ ${p} %`, hoverFit: "Schweben in Stick-Mitte", hoverNone: "Erst ein paar Sekunden schweben",
     hoverDone: (lo, hi) => `Gas: kleinster Schub ${lo} %, größter ${hi} %: Schweben liegt jetzt in der Stick-Mitte`,
@@ -692,7 +756,7 @@ const DEFAULTS = {
   drone: "192.168.43.42", mode: 2, throttle: "spring", rates: 1, thrMin: 25, thrMax: 85, expo: 0.3, expoYaw: 0.2,
   dead: 0.06, rumble: true, sound: true, voice: true, blurPause: true, keyboard: false, plotWin: 10, plotSet: "flight",
   panel: "pad", linkRP: true, liveGains: false, autoRec: true, mtPower: 15, mtTime: 2000, padKey: "", bindings: {},
-  stepDeg: 5, stepHold: true,
+  stepDeg: 5, stepHold: true, flips: false,
 };
 const RATE_SCALE = [0.5, 0.75, 1.0];
 const RATE_KEYS = ["rateBeginner", "rateNormal", "rateSport"];
@@ -852,6 +916,7 @@ function connect() {
     else if (type === MSG.FAST) onFast(v);
     else if (type === MSG.PARAM_REPLY) onParamReply(v);
     else if (type === MSG.MOTOR_REPLY) onMotorReply(v);
+    else if (type === MSG.FLIP_REPLY) onFlipReply(v);
   };
   ws.onclose = () => {
     const was = link.infoSeen;
@@ -1028,7 +1093,10 @@ function sendParam(op, name, value) {
   pendingParams[gainReqId] = { op, name, value };
   return send(b.buffer);
 }
-function readAllGains() { for (const n of GAIN_NAMES) sendParam(P_READ, n, 0); }
+function readAllGains() {
+  for (const n of GAIN_NAMES) sendParam(P_READ, n, 0);
+  if (proto() >= 4) for (const f of FLIP_PARAMS) sendParam(P_READ, f.name, 0);
+}
 function onParamReply(v) {
   if (v.byteLength < 14) return;
   const op = v.getUint8(1), id = v.getUint8(2), status = v.getUint8(3);
@@ -1049,7 +1117,7 @@ function onParamReply(v) {
   if (status === 1 || !name) { renderGains(); return; }
   gains[name] = { value, dflt: Number.isFinite(dflt) ? dflt : null, writable: !!(flags & PF_WRITABLE) };
   // The drone sets its gains up a moment after the start: read again until they are ready.
-  if (GAIN_NAMES.includes(name) && !(flags & PF_WRITABLE) && !gainRetry) {
+  if ((GAIN_NAMES.includes(name) || name.startsWith("flip.")) && !(flags & PF_WRITABLE) && !gainRetry) {
     gainRetry = setTimeout(() => { gainRetry = 0; if (link.infoSeen) readAllGains(); }, 2000);
   }
   if (op === P_WRITE) {
@@ -1062,6 +1130,20 @@ function onParamReply(v) {
     }
   }
   renderGains();
+}
+
+// ===== flips (experimental) =====================================================
+function sendFlip(dir) {
+  if (proto() < 4) { toast(t("flipNeedsV4"), "warn"); return false; }
+  const b = new Uint8Array([MSG.FLIP, dir, 0, 0]);
+  return send(b.buffer);
+}
+function onFlipReply(v) {
+  if (v.byteLength < 4) return;
+  const dir = v.getUint8(1), status = v.getUint8(2);
+  const name = t("flipDirs")[FLIP_DIRS[dir]] || "?";
+  if (status === 0) { logEvent(t("flipGo")(name), "ok"); beep([[1200, 60], [1600, 90]]); rumble(150, 0.4, 0.8); }
+  else { const why = t("flipReasons")[status] || "?"; toast(why, "warn"); logEvent(`${t("flipGo")(name)}: ${why}`, "warn"); ALERTS.limit(); }
 }
 
 // ===== motor test ===============================================================
@@ -1089,11 +1171,11 @@ function onMotorReply(v) {
   renderMotors();
 }
 // ===== input: gamepads and keyboard ===========================================
-const ACTIONS = ["arm", "stop", "trimUp", "trimDown", "trimLeft", "trimRight", "rates", "level", "marker", "stepRoll", "stepPitch"];
+const ACTIONS = ["arm", "stop", "trimUp", "trimDown", "trimLeft", "trimRight", "rates", "level", "marker", "stepRoll", "stepPitch", "flip"];
 const STICKS = ["throttle", "yaw", "pitch", "roll"];
 const ACTION_TEXT = { arm: "aArm", stop: "aStop", trimUp: "aTrimUp", trimDown: "aTrimDown", trimLeft: "aTrimLeft",
   trimRight: "aTrimRight", rates: "aRates", level: "aLevel", marker: "aMarker", stepRoll: "aStepRoll",
-  stepPitch: "aStepPitch", roll: "aRoll", pitch: "aPitch",
+  stepPitch: "aStepPitch", flip: "aFlip", roll: "aRoll", pitch: "aPitch",
   yaw: "aYaw", throttle: "aThrottle" };
 // Button labels by position in the standard layout (https://w3c.github.io/gamepad/#remapping)
 const LABELS = {
@@ -1133,7 +1215,7 @@ const learn = { action: null, base: null, until: 0 };
 function defaultBindings() {
   const b = { arm: { k: "b", i: 9 }, stop: { k: "b", i: 1 }, trimUp: { k: "b", i: 12 }, trimDown: { k: "b", i: 13 },
     trimLeft: { k: "b", i: 14 }, trimRight: { k: "b", i: 15 }, rates: { k: "b", i: 3 }, level: { k: "b", i: 2 },
-    marker: { k: "b", i: 0 }, stepRoll: { k: "b", i: 5 }, stepPitch: { k: "b", i: 4 } };
+    marker: { k: "b", i: 0 }, stepRoll: { k: "b", i: 5 }, stepPitch: { k: "b", i: 4 }, flip: { k: "b", i: 11 } };
   // standard layout: axes 0/1 left stick, 2/3 right stick, down = +1
   const left = settings.mode === 1 ? "pitch" : "throttle", right = settings.mode === 1 ? "throttle" : "pitch";
   b.yaw = { k: "a", i: 0 }; b[left] = { k: "a", i: 1, inv: true };
@@ -1382,6 +1464,7 @@ function onPress(a) {
     case "marker": addMarker(); break;
     case "stepRoll": startStep("roll"); break;
     case "stepPitch": startStep("pitch"); break;
+    case "flip": if (settings.flips) flipFromStick(); break;
     default: break;
   }
 }
@@ -1422,6 +1505,26 @@ function cycleRates() {
   logEvent(t("evRates")(n)); ALERTS.rates(n);
   $("setRates").value = String(settings.rates);
   render();
+}
+
+// flips: the gamepad gives the direction with the roll/pitch stick
+function flipAllowed() {
+  const tm = link.tel;
+  return !!(settings.flips && mineNow() && tm.stage === 0 && !(tm.state2 & S2_FLIP) && link.info && link.info.flip);
+}
+function flipFromStick() {
+  const r = input.raw;
+  let dir = -1;
+  if (Math.abs(r.pitch) >= Math.abs(r.roll) && Math.abs(r.pitch) > 0.4) dir = r.pitch > 0 ? 0 : 1;
+  else if (Math.abs(r.roll) > 0.4) dir = r.roll > 0 ? 3 : 2;
+  if (dir < 0) { toast(t("flipNoDir"), "warn"); ALERTS.limit(); return; }
+  doFlip(dir);
+}
+function doFlip(dir) {
+  if (!settings.flips) return;
+  if (proto() < 4) { toast(t("flipNeedsV4"), "warn"); return; }
+  if (link.info && !link.info.flip) { toast(t("flipOff"), "warn"); return; }
+  sendFlip(dir);
 }
 
 // trim: stored on the drone, shown from the telemetry
@@ -1610,10 +1713,10 @@ const PLOTS = {
   flight: [
     { title: "pRoll", sym: true, minSpan: 6, series: [
       { sig: "rollSp", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
-      { sig: "roll", alt: "tRoll", color: "--c-roll", label: "sActual", w: 1.7 }] },
+      { sig: "roll", alt: "tRoll", color: "--c-roll", label: "sActual", w: 1.7, wrap: true }] },
     { title: "pPitch", sym: true, minSpan: 6, series: [
       { sig: "pitchSp", color: "--c-sp", dash: [5, 4], label: "sSetpoint" },
-      { sig: "pitch", alt: "tPitch", color: "--c-pitch", label: "sActual", w: 1.7 }] },
+      { sig: "pitch", alt: "tPitch", color: "--c-pitch", label: "sActual", w: 1.7, wrap: true }] },
     { title: "pThrust", range: [0, 100], series: motorSeries(0.9).concat([
       { sig: "inThr", color: "--c-sp", dash: [2, 3], label: "sStick" },
       { sig: "thrCmd", alt: "thrOut", color: "--c-thr", label: "sThrust", w: 1.8 }]) },
@@ -1725,11 +1828,13 @@ class Plot {
       ctx.strokeStyle = color(s.color); ctx.lineWidth = s.w || 1.2; ctx.setLineDash(s.dash || []);
       ctx.lineJoin = "round";
       ctx.beginPath();
-      let col = null, cMin = 0, cMax = 0, cLast = 0, lastT = -Infinity, started = false;
+      let col = null, cMin = 0, cMax = 0, cLast = 0, lastT = -Infinity, lastV = 0, started = false;
       const flush = () => { if (col === null) return; ctx.lineTo(col, cMin); ctx.lineTo(col, cMax); ctx.lineTo(col, cLast); };
       data.forEach(a - 200, b, (tt, v) => {
         const x = Math.round(X(tt)), y = Y(v);
-        if (tt - lastT > 300) { flush(); col = null; ctx.moveTo(x, y); started = true; }
+        const jump = s.wrap && Math.abs(v - lastV) > 180;     // an angle passing +-180 deg
+        lastV = v;
+        if (tt - lastT > 300 || jump) { flush(); col = null; ctx.moveTo(x, y); started = true; }
         if (x !== col) { flush(); col = x; cMin = cMax = cLast = y; ctx.lineTo(x, y); }
         else { if (y < cMin) cMin = y; if (y > cMax) cMax = y; cLast = y; }
         lastT = tt;
@@ -1994,7 +2099,7 @@ function renderPadPanel() {
 }
 function renderBindTable() {
   const b = bindings(), rows = [];
-  const list = (input.pad && !input.standard ? STICKS : []).concat(ACTIONS);
+  const list = (input.pad && !input.standard ? STICKS : []).concat(ACTIONS.filter((a) => a !== "flip" || settings.flips));
   for (const a of list) {
     const learning = learn.action === a;
     const chip = learning ? (STICKS.includes(a) ? t("learnAxis")(a === "throttle" || a === "pitch" ? t("dirUp") : t("dirRight")) : t("learnButton")) : bindingLabel(b[a]);
@@ -2039,17 +2144,45 @@ function renderGains() {
     el.classList.toggle("pending", edit !== undefined);
     el.title = g && g.dflt !== null ? `${n} · default ${fmtGain(g.dflt)}` : n;
   });
+  renderFlipParams(old);
   const pending = Object.keys(gainEdits).length;
   $("gainState").textContent = !link.infoSeen || old ? "" : Object.keys(gains).length < GAIN_NAMES.length ? "…" :
     (gainsStored ? t("gainStored") : t("gainDefault")) + (pending ? " " + t("gainPending")(pending) : "");
   $("gainApply").disabled = !pending || old;
   ["gainRead", "gainSave", "gainReset"].forEach((id) => { $(id).disabled = old || !link.infoSeen; });
 }
+function renderFlipParams(old) {
+  const box = $("flipParams"), show = settings.flips;
+  box.style.display = show ? "block" : "none";
+  if (!show) return;
+  const tbl = $("flipTable");
+  if (!tbl.dataset.built) {
+    tbl.innerHTML = FLIP_PARAMS.map((f, i) => `<tr><td data-fl="${i}"></td><td><input data-gain="${f.name}" inputmode="decimal"></td></tr>`).join("");
+    tbl.dataset.built = "1";
+    tbl.querySelectorAll("input").forEach((el) => {
+      el.addEventListener("change", () => onGainInput(el));
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.blur(); });
+    });
+  }
+  tbl.querySelectorAll("[data-fl]").forEach((el) => { el.textContent = t("flipParamLabels")[+el.dataset.fl]; });
+  const noFlip = link.infoSeen && (proto() < 4 || !(link.info && link.info.flip));
+  $("flipParamsNote").textContent = !link.infoSeen ? "" : proto() < 4 ? t("flipNeedsV4") : noFlip ? t("flipOff") : t("flipParamsHelp");
+  tbl.querySelectorAll("input[data-gain]").forEach((el) => {
+    const n = el.dataset.gain, g = gains[n], edit = gainEdits[n];
+    if (document.activeElement !== el) el.value = edit !== undefined ? fmtGain(edit) : g ? fmtGain(g.value) : "";
+    el.disabled = old || noFlip || !g || !g.writable;
+    const cur = edit !== undefined ? edit : g ? g.value : null;
+    el.classList.toggle("changed", !!(g && g.dflt !== null && cur !== null && Math.abs(cur - g.dflt) > 1e-6));
+    el.classList.toggle("pending", edit !== undefined);
+    el.title = g && g.dflt !== null ? `${n} · default ${fmtGain(g.dflt)}` : n;
+  });
+}
 function fmtGain(v) { return String(+v.toPrecision(4)); }
 function onGainInput(el) {
   const n = el.dataset.gain, v = parseFloat(el.value.replace(",", "."));
-  const g = gains[n];
-  if (!Number.isFinite(v) || v < 0 || v > 5000) { renderGains(); return; }
+  const g = gains[n], fp = FLIP_PARAMS.find((f) => f.name === n);
+  const lo = fp ? fp.min : 0, hi = fp ? fp.max : 5000;
+  if (!Number.isFinite(v) || v < lo || v > hi) { toast(`${n}: ${lo} … ${hi}`, "warn"); renderGains(); return; }
   const names = [n];
   if (settings.linkRP && n.includes(".roll_")) names.push(n.replace(".roll_", ".pitch_"));
   for (const x of names) {
@@ -2247,6 +2380,7 @@ function render() {
   $("armHint").textContent = input.pad ? (armReq ? t("pressHint")(actionLabel("arm")) : t("holdHint")(actionLabel("arm"))) : "";
   $("killHint").textContent = input.pad ? actionLabel("stop") + " · Esc" : "Esc";
   renderTrim();
+  renderFlipCard();
   // message line
   const m = $("msg");
   let text = "", cls = "info";
@@ -2256,6 +2390,7 @@ function render() {
   else if (!live && location.protocol === "https:" && !link.open) { text = t("msgHttps"); cls = "bad"; }
   else if (!live) { text = link.open && link.infoSeen ? t("msgPoorLink") : t("msgNoLink")(link.address || settings.drone); cls = "bad"; }
   else if (mine && tm.stage >= 1) { text = t("stages")[tm.stage]; cls = tm.stage >= 2 ? "bad" : "warn"; }
+  else if (mine && (tm.state2 & S2_FLIP)) { text = t("msgFlip"); cls = "ok"; }
   else if (batLand) { text = t("msgBatLand"); cls = "bad"; }
   else if (tm.state & S_TUMBLED) { text = t("msgTumbled"); cls = "bad"; }
   else if (mine && (tm.state & S_LOWBAT)) { text = t("msgBatLow"); cls = "warn"; }
@@ -2273,6 +2408,16 @@ function render() {
   ov.style.display = showOv ? "flex" : "none";
   if (showOv) $("overlayBox").innerHTML = `<h2 class="badc">⚠</h2><p>${esc(t(paused === "pad" && !input.pad && input.hadPad ? "padLostMsg" : PAUSE_TEXT[paused]))}</p>` +
     (paused === "pad" ? `<p class="dim">${esc(t("padNeeded"))}</p>` : "");
+}
+function renderFlipCard() {
+  const card = $("flipCard");
+  card.style.display = settings.flips ? "block" : "none";
+  document.body.classList.toggle("flips", !!settings.flips);
+  if (!settings.flips) return;
+  const ok = flipAllowed();
+  card.querySelectorAll("button[data-flip]").forEach((b) => { b.disabled = !ok; });
+  $("flipCardNote").textContent = link.infoSeen && proto() < 4 ? t("flipNeedsV4") :
+    link.info && proto() >= 4 && !link.info.flip ? t("flipOff") : input.pad ? t("flipHintShort")(actionLabel("flip")) : "";
 }
 function frame() {
   drawPlots(); drawHorizon(); drawSticks();
@@ -2300,6 +2445,10 @@ $("trimZero").addEventListener("pointerdown", () => {
 });
 ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("trimZero").addEventListener(ev, () => clearTimeout(trimZeroTimer)));
 $("level").addEventListener("click", startLevel);
+document.querySelectorAll("#flipCard button[data-flip]").forEach((b) => b.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (flipAllowed()) doFlip(+b.dataset.flip);
+}));
 document.querySelectorAll("#plotTabs [data-set]").forEach((b) => b.addEventListener("click", () => {
   settings.plotSet = b.dataset.set; saveSettings(); buildPlots();
 }));
@@ -2346,6 +2495,7 @@ bindSetting("setSound", "sound", Boolean);
 bindSetting("setVoice", "voice", Boolean);
 bindSetting("setBlurPause", "blurPause", Boolean);
 bindSetting("setKeyboard", "keyboard", Boolean);
+bindSetting("setFlips", "flips", Boolean, () => { renderBindTable(); renderGains(); renderFlipCard(); });
 bindSetting("linkRP", "linkRP", Boolean);
 bindSetting("liveGains", "liveGains", Boolean);
 bindSetting("autoRec", "autoRec", Boolean);

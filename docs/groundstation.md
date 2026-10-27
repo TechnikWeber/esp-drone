@@ -77,6 +77,7 @@ Default buttons (Mode 2):
 | Level on the ground: hold 1.5 s | □ | X | Y |
 | Marker in the recording | ✕ | A | B |
 | Step test roll / pitch | R1 / L1 | RB / LB | R / L |
+| Flip (if switched on): press the right stick while pushing it | R3 | RS | RS |
 
 `Esc` on the keyboard is STOP as well while the ground station flies or runs a
 motor test (when someone else flies, use the STOP button: a stray `Esc` must
@@ -114,6 +115,24 @@ The ground station never leaves the drone with a stale command:
 - Warnings come as tones, voice and rumble: arming, link loss, low battery,
   forced landing, lost gamepad. Browsers allow sound only after a first click
   into the page.
+
+## Flips (experimental)
+
+Hidden until switched on: *Controller* → *Experimental* → "Flips". Then a flip
+card with four buttons appears under STOP, and pressing the right stick (R3)
+while pushing it flips in that direction. The drone flies the flip by itself:
+it climbs, turns over at a fixed rate, levels out and catches the fall (details
+in [webcontrol.md](webcontrol.md#flips-experimental)). It only flips in flight
+after about 2 s of hovering, with the throttle near hover.
+
+**Without an altitude sensor the drone may lose height:** start at 2 m or
+higher, with plenty of room. Not tested on real hardware yet. The *Tuning*
+panel then also lists the flip parameters (rotation rate, climb, thrust while
+turning and catching, when to level out); they are stored with *Save on drone*
+like the gains. The Flight plots show each flip: roll or pitch through ±180°
+and the thrust of the three phases.
+
+Firmware v0.4.0 or newer (protocol 4) is needed.
 
 ## Plots
 

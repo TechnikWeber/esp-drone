@@ -75,6 +75,9 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
   stored on the drone, step test, motor test, flight recorder. The firmware
   sends 100 Hz samples of the flight controller, the gains and the motor test
   over the same WebSocket (protocol 3, the phone page keeps working).
+- **Flips (experimental, hidden by default):** one tap on the phone or in the
+  ground station, the drone flies the flip by itself (climb, turn, level out,
+  catch). See [docs/webcontrol.md](docs/webcontrol.md#flips-experimental).
 - **New board: E1 Mini** (pictured), a mini quadcopter kit with a plug-in
   ESP32 DevKit and an MPU6500 on SPI. Sellers use many brand names; "ESP32
   Drone" and "E1" or "E1 Mini" are in almost every listing. Its open hardware

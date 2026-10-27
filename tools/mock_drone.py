@@ -28,7 +28,7 @@ is a UI tool; the real logic is tested in components/webctrl/host_test.
                               the drone stands level (try "Level on the ground")
 --turbulence T                strength of the simulated gusts (default 1, 0 = calm)
 --legacy                      behave like firmware v0.2 (protocol 2: no gains,
-                              no fast samples, no motor test)
+                              no fast samples, no motor test, no flips)
 
 Copyright 2026 Philipp Weber
 SPDX-License-Identifier: GPL-3.0-only
@@ -49,12 +49,13 @@ import time
 PAGE = os.path.join(os.path.dirname(__file__), "..", "components", "webctrl", "web", "index.html")
 
 # protocol (webctrl_core.h)
-PROTO = 3
-MSG_CONTROL, MSG_HELLO, MSG_TRIM, MSG_PARAM, MSG_STREAM, MSG_MOTOR_TEST = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
-MSG_TELEMETRY, MSG_FAST, MSG_PARAM_REPLY, MSG_MOTOR_REPLY = 0x81, 0x82, 0x84, 0x86
+PROTO = 4
+MSG_CONTROL, MSG_HELLO, MSG_TRIM, MSG_PARAM, MSG_STREAM, MSG_MOTOR_TEST, MSG_FLIP = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
+MSG_TELEMETRY, MSG_FAST, MSG_PARAM_REPLY, MSG_MOTOR_REPLY, MSG_FLIP_REPLY = 0x81, 0x82, 0x84, 0x86, 0x87
 F_ARM, F_KILL, F_PAUSE = 1, 2, 4
 S_ARMED, S_YOU, S_OTHER, S_FAILSAFE, S_LOWBAT, S_BLOCKED, S_READY, S_TUMBLED = 1, 2, 4, 8, 16, 32, 64, 128
-S2_BAT_LAND, S2_BAT_NOARM, S2_MOTOR_TEST = 1, 2, 4
+S2_BAT_LAND, S2_BAT_NOARM, S2_MOTOR_TEST, S2_FLIP = 1, 2, 4, 8
+FLIP_OK, FLIP_DISABLED, FLIP_NOT_PILOT, FLIP_NOT_FLYING, FLIP_BUSY = range(5)
 STOP_RELEASED, STOP_KILL, STOP_LINK, STOP_TUMBLED, STOP_BATTERY = 1, 2, 3, 4, 5
 ARM_OK, ARM_NOT_READY, ARM_THRUST, ARM_BATTERY, ARM_OTHER, ARM_TUMBLED, ARM_RELEASE, ARM_MOTOR_TEST = range(8)
 OK_MS, HOLD_MS, DESCEND_MS, OFF_MS, STALE_MS = 100, 300, 1000, 4000, 250
@@ -79,6 +80,13 @@ GAINS = {
     "pid_attitude.pitch_kp": 5.9, "pid_attitude.pitch_ki": 2.9, "pid_attitude.pitch_kd": 0.0,
     "pid_attitude.yaw_kp": 6.0, "pid_attitude.yaw_ki": 1.0, "pid_attitude.yaw_kd": 0.35,
 }
+# Flip parameters (group "flip") with their ranges, as in the firmware
+FLIP_PARAMS = {"flip.rate": (800.0, 360, 2000), "flip.boostMs": (250.0, 0, 600), "flip.boost": (170.0, 100, 250),
+               "flip.spin": (50.0, 10, 150), "flip.exitDeg": (70.0, 10, 120), "flip.recoverMs": (350.0, 0, 1000),
+               "flip.recover": (140.0, 50, 250), "flip.timeoutMs": (900.0, 300, 1500)}
+# everything the network may change, with the defaults
+TUNABLES = dict(GAINS, **{k: v[0] for k, v in FLIP_PARAMS.items()})
+RANGES = dict({k: (0, 5000) for k in GAINS}, **{k: (v[1], v[2]) for k, v in FLIP_PARAMS.items()})
 OTHER_PARAMS = {"stabilizer.controller": 1.0, "stabilizer.estimator": 1.0, "motorPowerSet.enable": 0.0,
                 "powerDist.idleThrust": 0.0}
 
@@ -119,6 +127,7 @@ class Axis:
         self.att, self.rate_pid = Pid(ilimit_att), Pid(ilimit_rate)
         self.angle = self.rate = self.torque = self.gust = 0.0
         self.angle_sp = self.rate_sp = self.out = self.gyro = self.seen = 0.0
+        self.rate_override = None   # rate mode (flip): deg/s instead of the attitude PID
         self.delayed = [(0.0, 0.0)] * self.DELAY_STEPS
 
     def reset_controller(self):
@@ -133,11 +142,13 @@ class Axis:
         self.delayed.append((self.angle, self.rate))
         self.seen, rate = self.delayed.pop(0)
         self.gyro = rate + random.gauss(0, 0.6)               # vibration noise
-        err = self.angle_sp - self.seen
-        if self.name == "yaw":
-            err = (err + 180) % 360 - 180
-        self.rate_sp = self.att.update(err, self.g("attitude", "kp"), self.g("attitude", "ki"),
-                                       self.g("attitude", "kd"), dt)
+        err = (self.angle_sp - self.seen + 180) % 360 - 180
+        if self.rate_override is not None:
+            self.att.reset()
+            self.rate_sp = self.rate_override
+        else:
+            self.rate_sp = self.att.update(err, self.g("attitude", "kp"), self.g("attitude", "ki"),
+                                           self.g("attitude", "kd"), dt)
         self.out = clamp(self.rate_pid.update(self.rate_sp - self.gyro, self.g("rate", "kp"),
                                               self.g("rate", "ki"), self.g("rate", "kd"), dt), -32767, 32767)
         if not flying:                       # on the ground: nothing turns
@@ -147,9 +158,7 @@ class Axis:
         self.gust += (-self.gust / 0.4 + random.gauss(0, 900) * turbulence) * dt
         accel = self.gain * (self.torque + self.gust) - self.damping * self.rate
         self.rate += accel * dt
-        self.angle += self.rate * dt
-        if self.name == "yaw":
-            self.angle = (self.angle + 180) % 360 - 180
+        self.angle = (self.angle + self.rate * dt + 180) % 360 - 180
 
 
 class Drone:
@@ -173,13 +182,16 @@ class Drone:
         self.land_from = 0.0
         self.low_since = None
         self.boot = time.monotonic()
-        self.gains = dict(GAINS)
+        self.gains = dict(TUNABLES)
         self.stored = None          # gains "in flash"
         self.roll = Axis("roll", 0.40, 2.0, 20.0, 33.3)
         self.pitch = Axis("pitch", 0.40, 2.0, 20.0, 33.3)
         self.yaw = Axis("yaw", 0.08, 1.5, 360.0, 166.7)
         self.motors = [0, 0, 0, 0]
         self.motor_test = None      # (client, mask, percent, until_ms)
+        self.flip = None            # running flip (dict)
+        self.hover = 0.0            # learned hover thrust
+        self.hover_s = 0.0          # seconds of flight in it
         self.fast = []              # samples of the current FAST frame
         self.fast_seq = 0
         self.fast_t0 = 0
@@ -193,6 +205,30 @@ class Drone:
     def busy(self):
         return bool(self.token) or self.motor_test is not None
 
+    def flip_update(self, t):
+        """The firmware's flip (wcFlipUpdate): returns (spin, roll rate, pitch rate, thrust) or None when over."""
+        f, cfg = self.flip, self.gains
+        hover = f["hover"]
+        if f["phase"] == "boost":
+            if (t - f["t0"]) & 0xFFFFFFFF < cfg["flip.boostMs"]:
+                return False, 0, 0, min(1.0, hover * cfg["flip.boost"] / 100)
+            f["phase"], f["t0"] = "spin", t
+        if f["phase"] == "spin":
+            up = math.cos(math.radians(self.roll.angle)) * math.cos(math.radians(self.pitch.angle))
+            f["inverted"] = f["inverted"] or up < -0.5
+            done = f["inverted"] and up > math.cos(math.radians(cfg["flip.exitDeg"]))
+            timeout = not done and (t - f["t0"]) & 0xFFFFFFFF >= cfg["flip.timeoutMs"]
+            if not done and not timeout:
+                rate, d = cfg["flip.rate"], f["dir"]
+                return (True, rate if d == 3 else -rate if d == 2 else 0, -rate if d == 0 else rate if d == 1 else 0,
+                        max(0.1, min(1.0, hover * cfg["flip.spin"] / 100)))
+            print(f"[drone] flip {'timed out' if timeout else 'done'}")
+            f["phase"], f["t0"] = "recover", t
+        if (t - f["t0"]) & 0xFFFFFFFF < cfg["flip.recoverMs"]:
+            return False, 0, 0, min(1.0, hover * cfg["flip.recover"] / 100)
+        self.flip = None
+        return None
+
     def age(self, t):
         if self.last is None:
             return OFF_MS
@@ -203,6 +239,8 @@ class Drone:
 
     def end_session(self, why, reason, block=True):
         print(f"[drone] disarmed: {why}")
+        self.flip, self.hover, self.hover_s = None, 0.0, 0.0
+        self.roll.rate_override = self.pitch.rate_override = None
         if self.pilot and block:
             self.pilot.released = False
         self.pilot, self.token, self.last, self.stage, self.thrust = None, 0, None, 4, 0.0
@@ -308,6 +346,17 @@ class Drone:
                 roll_sp, pitch_sp, thrust = tr, tp, min(thr / 1000, HOVER * 0.85)
             else:
                 self.end_session("link lost, failsafe ended", STOP_LINK)
+            rates = None
+            if self.flip and thrust is not None:
+                res = self.flip_update(t)
+                if res:
+                    spin, rr, pr, thrust = res
+                    roll_sp, pitch_sp, yaw_rate = tr, tp, 0.0
+                    rates = (rr, pr) if spin else None
+            elif stage == 0 and thrust is not None and thrust > 0.15:
+                self.hover = thrust if not self.hover_s else self.hover + (thrust - self.hover) * min(1.0, dt / 3)
+                self.hover_s += dt
+            self.roll.rate_override, self.pitch.rate_override = rates if rates else (None, None)
             if thrust is not None:
                 thrust = self.battery(t, thrust, thr)
             if thrust is not None:
@@ -320,7 +369,8 @@ class Drone:
     def simulate(self, dt, roll_sp, pitch_sp, yaw_rate):
         """Crazyflie conventions inside: pitch + = nose up, yaw + = counter-clockwise."""
         armed = bool(self.token)
-        flying = armed and self.thrust > HOVER * 0.75
+        flying = armed and (self.thrust > HOVER * 0.75 or self.flip is not None or
+                            abs(self.roll.angle) > 1 or abs(self.pitch.angle) > 1)
         steps = max(1, min(50, round(dt / 0.002)))
         h = dt / steps
         for _ in range(steps):
@@ -390,6 +440,8 @@ class Drone:
             s2 |= S2_BAT_NOARM
         if self.motor_test:
             s2 |= S2_MOTOR_TEST
+        if self.flip:
+            s2 |= S2_FLIP
         seq, cms = c.echo
         mine = c is self.pilot
         return struct.pack("<BBBBHHIHhhhHHHBBIIbbH", MSG_TELEMETRY, s, self.stage if self.token else 4, c.arm_result,
@@ -512,8 +564,8 @@ def on_param(c, frame):
             param_reply(c, op, req, P_BUSY)
             return
         if op == PARAM_RESET:
-            drone.gains = dict(GAINS)
-        drone.stored = None if drone.gains == GAINS else dict(drone.gains)
+            drone.gains = dict(TUNABLES)
+        drone.stored = None if drone.gains == TUNABLES else dict(drone.gains)
         print(f"[drone] gains {'reset' if op == PARAM_RESET else 'stored'}")
         param_reply(c, op, req, P_OK)
         return
@@ -523,14 +575,15 @@ def on_param(c, frame):
     elif name in drone.gains:
         status = P_OK
         if op == PARAM_WRITE:
-            if drone.motor_test or (drone.token and c is not drone.pilot):
+            lo, hi = RANGES[name]
+            if drone.motor_test or (drone.token and c is not drone.pilot) or (drone.flip and name in FLIP_PARAMS):
                 status = P_BUSY
-            elif not (math.isfinite(value) and 0 <= value <= 5000):
+            elif not (math.isfinite(value) and lo <= value <= hi):
                 status = P_INVALID
             else:
-                drone.gains[name] = value
+                drone.gains[name] = round(value) if name in FLIP_PARAMS else value
                 print(f"[drone] {name} = {value:.4g}")
-        param_reply(c, op, req, status, name, drone.gains[name], GAINS[name], PF_WRITABLE)
+        param_reply(c, op, req, status, name, drone.gains[name], TUNABLES[name], PF_WRITABLE)
     elif name in OTHER_PARAMS:
         param_reply(c, op, req, P_DENIED if op == PARAM_WRITE else P_OK, name, OTHER_PARAMS[name])
     else:
@@ -555,6 +608,23 @@ def on_motor_test(c, frame):
     c.writer.write(ws_frame(2, struct.pack("<BBBBHH", MSG_MOTOR_REPLY, applied[0], applied[1], status, applied[2], 0)))
 
 
+def on_flip(c, frame):
+    d = frame[1]
+    if d > 3:
+        return
+    if c is not drone.pilot or not drone.token:
+        status = FLIP_NOT_PILOT
+    elif drone.flip or drone.stage != 0 or drone.landing or drone.motor_test:
+        status = FLIP_BUSY
+    elif drone.hover_s < 2 or drone.thrust < 0.7 * drone.hover:
+        status = FLIP_NOT_FLYING
+    else:
+        status = FLIP_OK
+        drone.flip = {"phase": "boost", "dir": d, "t0": now_ms(), "inverted": False, "hover": drone.hover}
+        print(f"[drone] flip {['forward', 'back', 'left', 'right'][d]} (hover {drone.hover:.2f})")
+    c.writer.write(ws_frame(2, struct.pack("<BBBB", MSG_FLIP_REPLY, d, status, 0)))
+
+
 def process(c, frame):
     t = now_ms()
     if frame[0] == MSG_HELLO and len(frame) == 8:
@@ -571,7 +641,7 @@ def process(c, frame):
                             "landTime": int(BAT_LAND_S * 1000)}, "trimMax": TRIM_MAX}
         if not args.legacy:
             info.update({"fastHz": 1000 // FAST_PERIOD_MS,
-                         "motorTest": {"maxPercent": MOTOR_MAX_PERCENT, "maxMs": MOTOR_MAX_MS}})
+                         "motorTest": {"maxPercent": MOTOR_MAX_PERCENT, "maxMs": MOTOR_MAX_MS}, "flip": True})
         c.writer.write(ws_frame(1, json.dumps(info).encode()))
     elif frame[0] == MSG_CONTROL and len(frame) == 16:
         drone.on_control(c, frame, t)
@@ -590,6 +660,8 @@ def process(c, frame):
         on_param(c, frame)
     elif frame[0] == MSG_MOTOR_TEST and len(frame) == 8:
         on_motor_test(c, frame)
+    elif frame[0] == MSG_FLIP and len(frame) == 4:
+        on_flip(c, frame)
 
 
 async def ticker():

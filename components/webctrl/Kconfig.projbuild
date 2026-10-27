@@ -134,6 +134,79 @@ menu "ESPDrone web control (captive portal)"
             help
                 One of them can fly, the others see the telemetry.
 
+        menu "Flips (experimental)"
+
+            config WEBCTRL_FLIP
+                bool "Allow flips on request of the web pilot"
+                default y
+                help
+                    The pilot taps a flip button (hidden on the pages by default),
+                    the drone flies the flip by itself: climb, turn at a fixed rate
+                    with little thrust, level out and catch the fall. Without an
+                    altitude sensor this is open loop: it needs at least 2 m of
+                    height and room. Only in flight, after the hover thrust has
+                    been learned. The values below are the defaults; the ground
+                    station can change and store them (parameter group "flip").
+
+            config WEBCTRL_FLIP_RATE_DPS
+                int "Rotation rate (deg/s)"
+                depends on WEBCTRL_FLIP
+                range 360 2000
+                default 800
+
+            config WEBCTRL_FLIP_BOOST_MS
+                int "Climb before the rotation (ms)"
+                depends on WEBCTRL_FLIP
+                range 0 600
+                default 250
+
+            config WEBCTRL_FLIP_BOOST_PERCENT
+                int "Thrust while climbing (% of the hover thrust)"
+                depends on WEBCTRL_FLIP
+                range 100 250
+                default 170
+
+            config WEBCTRL_FLIP_SPIN_PERCENT
+                int "Thrust while rotating (% of the hover thrust)"
+                depends on WEBCTRL_FLIP
+                range 10 150
+                default 50
+                help
+                    Upside down the thrust pushes the drone down, so it is low
+                    while turning; the motors still need some to turn the drone.
+
+            config WEBCTRL_FLIP_EXIT_DEG
+                int "Level out this far before upright (deg)"
+                depends on WEBCTRL_FLIP
+                range 10 120
+                default 70
+                help
+                    The attitude controller takes over this many degrees before
+                    the drone is upright again, to brake the rotation in time.
+
+            config WEBCTRL_FLIP_RECOVER_MS
+                int "Catching after the rotation (ms)"
+                depends on WEBCTRL_FLIP
+                range 0 1000
+                default 350
+
+            config WEBCTRL_FLIP_RECOVER_PERCENT
+                int "Thrust while catching (% of the hover thrust)"
+                depends on WEBCTRL_FLIP
+                range 50 250
+                default 140
+
+            config WEBCTRL_FLIP_TIMEOUT_MS
+                int "Longest rotation (ms)"
+                depends on WEBCTRL_FLIP
+                range 300 1500
+                default 900
+                help
+                    If the drone has not turned over by then, it levels out
+                    without finishing the flip.
+
+        endmenu
+
         config WEBCTRL_MOTOR_TEST_MAX_PERCENT
             int "Motor test: highest power in percent (0 = no motor test)"
             range 0 50

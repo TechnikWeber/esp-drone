@@ -144,6 +144,36 @@ If the drone drifts sideways by itself while hovering, the trim corrects it: tap
 - When the drone stops, the page shows why: STOP, link lost, upside down or
   battery empty.
 
+## Flips (experimental)
+
+The pilot taps a flip button, the drone flies the flip by itself, so a stalled
+link cannot cut it in half. The buttons are hidden: *Info* → *Experimental* →
+"Show flip buttons" on the phone, *Controller* → *Experimental* in the
+[ground station](groundstation.md#flips-experimental).
+
+1. **Climb:** 250 ms at 170 % of the hover thrust.
+2. **Turn** about the roll or pitch axis at 800 °/s with 50 % of the hover
+   thrust (upside down, thrust pushes the drone down). Both tilt axes are rate
+   controlled, because the Euler angles of the attitude controller jump by
+   180° when a pitch flip passes the vertical; yaw holds where it is.
+3. Once the drone has been upside down and is back within 70° of upright, the
+   attitude controller **levels it out** (trim) with 140 % of the hover thrust
+   for 350 ms to catch the fall. If it has not turned over after 900 ms, it
+   levels out without finishing.
+4. Then the pilot's sticks count again.
+
+The drone only flips for the web pilot, in flight after it has learned the
+hover thrust (about 2 s of flying), with the throttle near hover, a fresh link,
+no forced landing and no motor test. Meanwhile the telemetry shows state 2
+bit 3. The STOP button works as always.
+
+**Without an altitude sensor this is open loop:** how much height the drone
+loses depends on the battery, the weight and the values above. Start at 2 m or
+higher, with plenty of room. Not tested on real hardware yet. The values are
+the defaults in `menuconfig` → *ESPDrone web control* → *Flips (experimental)*,
+which can also switch flips off completely; the ground station can change and
+store them while the drone is on the ground (parameter group `flip`).
+
 ## Protocol
 
 Binary WebSocket frames, little endian. Defined in
@@ -154,6 +184,8 @@ Binary WebSocket frames, little endian. Defined in
 - Version 3: STREAM, PARAM and MOTOR_TEST for the ground station, FAST samples,
   motor test bit in the telemetry. All of it is optional: a page that only knows
   version 2 works unchanged, and the drone ignores unknown message types.
+- Version 4: FLIP (experimental), flip parameters writable with PARAM, `flip`
+  in the info frame, flip bit in the telemetry.
 
 ### CONTROL (page → drone, 16 bytes, 50 Hz)
 
@@ -176,13 +208,14 @@ type, value range, unknown flags) are ignored.
 | Offset | Type | Field |
 |---|---|---|
 | 0 | u8 | `0x02` |
-| 1 | u8 | protocol version (3) |
+| 1 | u8 | protocol version (4) |
 | 4 | u32 | session token, 0 = new session |
 
 The drone answers with a text frame `{"t":"info", …}` (firmware, device,
 `proto`, limits, failsafe times, battery limits `battery`, `trimMax`,
 `resumed`; since version 3 also `fastHz` and `motorTest` with `maxPercent` and
-`maxMs`, `maxPercent` 0 = no motor test). Telemetry starts only after the HELLO.
+`maxMs`, `maxPercent` 0 = no motor test; since version 4 `flip`, true if flips
+are compiled in). Telemetry starts only after the HELLO.
 
 ### TRIM (page → drone, 4 bytes, on every change)
 
@@ -212,7 +245,7 @@ only from the pilot, and reports the valid values back in the telemetry.
 | 20 | u16 | thrust sent to the controller 0…1000 |
 | 22 | u16 | dropped late commands |
 | 24 | u16 | extra delay of the last command in ms |
-| 26 | u8 | state 2: bit0 forced landing (battery empty), bit1 battery too low to arm (only on the ground), bit2 motor test running |
+| 26 | u8 | state 2: bit0 forced landing (battery empty), bit1 battery too low to arm (only on the ground), bit2 motor test running, bit3 flip running |
 | 27 | u8 | reason of the last stop: 0 none, 1 disarmed, 2 STOP, 3 link lost, 4 upside down, 5 battery empty, 6 disarmed elsewhere |
 | 28 | u32 | uptime of the drone in ms |
 | 32 | u32 | session token (to the pilot only) |
@@ -264,13 +297,21 @@ pitch + = nose up, yaw + = counter-clockwise seen from above.
 | 4 | f32 | value (write) |
 | 8 | ASCII | parameter `group.name`, up to 31 characters, no terminator (read and write only) |
 
-Every firmware parameter can be read. Only the 18 controller gains
-`pid_rate.*` and `pid_attitude.*` (`roll_kp` … `yaw_kd`) can be written, with
-values from 0 to 5000; they take effect at once. In flight only the pilot may
-write. *Save* stores all gains in the drone's flash (NVS), where they replace
-the firmware defaults at the next start; *reset* sets the defaults again and
-erases the stored gains. Both only while nobody flies, because writing the
-flash pauses the flight controller for a few milliseconds.
+Every firmware parameter can be read. Only these can be written; they take
+effect at once:
+
+- the 18 controller gains `pid_rate.*` and `pid_attitude.*` (`roll_kp` …
+  `yaw_kd`), 0 to 5000;
+- the flip parameters (version 4): `flip.rate` 360–2000 °/s, `flip.boostMs`
+  0–600, `flip.boost` 100–250 % of hover, `flip.spin` 10–150 %,
+  `flip.exitDeg` 10–120°, `flip.recoverMs` 0–1000, `flip.recover` 50–250 %,
+  `flip.timeoutMs` 300–1500 (not while a flip runs).
+
+In flight only the pilot may write. *Save* stores all of them in the drone's
+flash (NVS), where they replace the firmware defaults at the next start;
+*reset* sets the defaults again and erases the stored values. Both only while
+nobody flies, because writing the flash pauses the flight controller for a few
+milliseconds.
 
 ### PARAM_REPLY (drone → client, 14 + name bytes)
 
@@ -316,11 +357,28 @@ the test.
 | 4 | u16 | duration in ms as applied |
 | 6 | u16 | reserved |
 
+### FLIP (client → drone, 4 bytes, experimental)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x07` |
+| 1 | u8 | direction: 0 forward (nose down first), 1 backward, 2 left, 3 right |
+| 2 | u16 | reserved (0) |
+
+### FLIP_REPLY (drone → client, 4 bytes)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | `0x87` |
+| 1 | u8 | direction |
+| 2 | u8 | status: 0 flip started, 1 switched off, 2 not the pilot, 3 not flying (hover thrust not learned yet, or throttle too low), 4 busy (flip running, failsafe, forced landing, motor test) |
+| 3 | u8 | reserved |
+
 ## Testing without a drone
 
 - **Unit tests** for the protocol (including the ground station messages),
   failsafe, delay estimator, resume, trim, battery protection, gains, motor
-  test checks and DNS: `make -C components/webctrl/host_test`
+  test checks, the flip sequence and DNS: `make -C components/webctrl/host_test`
 - **Simulated drone** for the page:
   `python3 tools/mock_drone.py --stall-every 6 --stall-ms 450`, then open
   `http://127.0.0.1:8080/?host=127.0.0.1:8081`. The option creates a TCP-like
@@ -328,8 +386,8 @@ the test.
   battery starts nearly empty: after about 10 s of hovering the forced landing
   begins. `&lang=de` or `&lang=en` in the address picks the language. The
   mock simulates the PID controller and the airframe (`--turbulence` sets the
-  gusts) and answers PARAM, STREAM and MOTOR_TEST; `--legacy` makes it behave
-  like firmware v0.2.
+  gusts) and answers PARAM, STREAM, MOTOR_TEST and FLIP; `--legacy` makes it
+  behave like firmware v0.2.
 - **Screenshots** for the README: `python3 tools/ui_screenshots.py` drives the
   page in headless Google Chrome against the simulated drone and rewrites
   `docs/images/webcontrol-*.png` (ImageMagick makes them smaller, if

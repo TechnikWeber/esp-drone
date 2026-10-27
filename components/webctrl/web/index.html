@@ -53,6 +53,12 @@ button:disabled{opacity:.45}
 #level{display:none;width:146px;padding:6px 8px;font-size:13px}
 #mid.trimming #level{display:block}
 #mid.trimming #stats{display:none}
+#flipBox{display:none;width:150px}
+#mid.flipon #flipBox{display:block}
+#mid.flipon #stats,#mid.trimming #flipBox{display:none}
+#flipBox .cap{font-size:11px;color:var(--dim);text-align:center;margin-bottom:2px}
+#flips{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+#flips button{padding:5px 0;font-size:14px;border-radius:8px}
 #rotate,#dlg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0b0f14f2;z-index:5;padding:20px;text-align:center}
 #dlg .box{max-width:560px;max-height:90vh;overflow:auto;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;user-select:text;-webkit-user-select:text;touch-action:pan-y}
 #dlg h2{margin:.2em 0 .5em;font-size:18px}#dlg p{margin:.5em 0;color:#c8d1db}#dlg small{color:var(--dim)}
@@ -83,6 +89,9 @@ button:disabled{opacity:.45}
         <span></span><button data-ax="p" data-d="-1" data-ta="trimDown">▼</button><span></span>
       </div>
       <button id="level" data-t="level"></button>
+      <div id="flipBox"><div class="cap" data-t="flipTitle"></div><div id="flips">
+        <button data-dir="2" data-ta="flipLeft">◀</button><button data-dir="0" data-ta="flipForward">▲</button><button data-dir="1" data-ta="flipBack">▼</button><button data-dir="3" data-ta="flipRight">▶</button>
+      </div></div>
       <div id="stats">–</div>
       <button id="kill" data-t="kill"></button>
     </div>
@@ -98,16 +107,19 @@ button:disabled{opacity:.45}
   <p data-h="helpTrim"></p>
   <p><span data-h="helpBattery"></span> <span id="dbat">–</span></p>
   <p data-h="helpSafety"></p>
+  <p><b data-t="experimental"></b><br><label><input type="checkbox" id="flipSet"> <span data-t="flipSetting"></span></label><br>
+    <small id="flipNote"></small></p>
   <p><small data-t="license"></small></p>
   <p style="text-align:right"><button id="dclose" data-t="close"></button></p>
 </div></div>
 <script>
 "use strict";
 // ---- protocol (docs/webcontrol.md) --------------------------------------
-const PROTO = 3, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_TELEMETRY = 0x81, TELEMETRY_LEN = 40;
+const PROTO = 4, MSG_CONTROL = 1, MSG_HELLO = 2, MSG_TRIM = 3, MSG_FLIP = 7, MSG_TELEMETRY = 0x81, MSG_FLIP_REPLY = 0x87;
+const TELEMETRY_LEN = 40;
 const F_ARM = 1, F_KILL = 2, F_PAUSE = 4;
 const S_ARMED = 1, S_YOU = 2, S_OTHER = 4, S_FAILSAFE = 8, S_LOWBAT = 16, S_BLOCKED = 32, S_READY = 64, S_TUMBLED = 128;
-const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4;
+const S2_BAT_LAND = 1, S2_BAT_NOARM = 2, S2_MOTOR_TEST = 4, S2_FLIP = 8;
 const STOP_BATTERY = 5;
 const TRIM_STEP = 5;   // 0.5° in 1/10°
 const SEND_MS = 20, TELEMETRY_WARN_MS = 600, TELEMETRY_DEAD_MS = 2500;
@@ -143,7 +155,14 @@ const TEXT = {
     msgPoorLink: "Poor link – the drone takes over shortly", msgNoLink: "No connection – looking for the drone…",
     msgBatLand: "Battery empty – the drone is landing. Throttle down after touchdown",
     msgTumbled: "Drone is upside down", msgBatLow: "Battery low – land soon", msgBatEmpty: "Battery empty – please charge",
-    msgOther: "Someone else is flying", msgMotorTest: "Motor test running (ground station)", msgCalibrating: "Calibrating – keep the drone still",
+    msgOther: "Someone else is flying", msgMotorTest: "Motor test running (ground station)", msgFlip: "Flip…",
+    flipTitle: "Flip", flipLeft: "Flip left", flipRight: "Flip right", flipForward: "Flip forward", flipBack: "Flip backward",
+    flipGo: "Flip!", flipReasons: ["", "Flips are switched off in this firmware", "Only the pilot can flip",
+      "Hover for a few seconds first, then flip at hover throttle", "Not now (link, battery or a flip still running)"],
+    experimental: "Experimental", flipSetting: "Show flip buttons",
+    flipWarn: "The drone flies the flip by itself: it climbs, turns over and catches itself. Without an altitude " +
+      "sensor it may lose height: only at 2 m or higher, with plenty of room around. Not tested on real hardware yet.",
+    flipOff: "Flips are switched off in this firmware.", msgCalibrating: "Calibrating – keep the drone still",
     msgFlying: "Ready – have fun", msgIdle: "Throttle down, then hold “Arm” for 1 s",
     dinfo: (j) => `${j.device || "Drone"} · firmware ${j.fw || "?"} · protocol ${j.proto} · max ${j.maxAngle}° / ${j.maxYawRate}°/s`,
     dfs: (f) => `hold up to ${f.hold} ms, level out up to ${f.descend} ms, motors off after ${f.off} ms; ` +
@@ -194,7 +213,14 @@ const TEXT = {
     msgNoLink: "Keine Verbindung – suche Drohne…",
     msgBatLand: "Akku leer – Drohne landet. Nach dem Aufsetzen Gas ganz runter",
     msgTumbled: "Drohne liegt auf dem Kopf", msgBatLow: "Akku schwach – bitte bald landen",
-    msgBatEmpty: "Akku leer – bitte laden", msgOther: "Eine andere Steuerung fliegt gerade", msgMotorTest: "Motortest läuft (Bodenstation)",
+    msgBatEmpty: "Akku leer – bitte laden", msgOther: "Eine andere Steuerung fliegt gerade", msgMotorTest: "Motortest läuft (Bodenstation)", msgFlip: "Flip…",
+    flipTitle: "Flip", flipLeft: "Flip links", flipRight: "Flip rechts", flipForward: "Flip vorwärts", flipBack: "Flip rückwärts",
+    flipGo: "Flip!", flipReasons: ["", "Flips sind in dieser Firmware abgeschaltet", "Nur der Pilot kann flippen",
+      "Erst ein paar Sekunden schweben, dann mit Schwebe-Gas flippen", "Gerade nicht (Verbindung, Akku oder Flip läuft noch)"],
+    experimental: "Experimentell", flipSetting: "Flip-Tasten anzeigen",
+    flipWarn: "Die Drohne fliegt den Flip selbst: Sie steigt, überschlägt sich und fängt sich wieder. Ohne Höhensensor " +
+      "kann sie dabei Höhe verlieren: nur ab 2 m Höhe und mit viel Platz ringsum. Noch nicht auf echter Hardware getestet.",
+    flipOff: "Flips sind in dieser Firmware abgeschaltet.",
     msgCalibrating: "Drohne kalibriert – bitte still hinstellen", msgFlying: "Bereit – viel Spaß",
     msgIdle: "Gas runter, dann „Scharfschalten“ 1 s halten",
     dinfo: (j) => `${j.device || "Drohne"} · Firmware ${j.fw || "?"} · Protokoll ${j.proto} · max. ${j.maxAngle}° / ${j.maxYawRate}°/s`,
@@ -309,7 +335,9 @@ function connect() {
   };
   ws.onmessage = ev => {
     if (typeof ev.data === "string") { try { const j = JSON.parse(ev.data); if (j.t === "info") onInfo(j); } catch (e) {} return; }
-    if (ev.data.byteLength >= TELEMETRY_LEN) onTelemetry(new DataView(ev.data));
+    const v = new DataView(ev.data);
+    if (v.byteLength >= 3 && v.getUint8(0) === MSG_FLIP_REPLY) { onFlipReply(v.getUint8(2)); return; }
+    if (v.byteLength >= TELEMETRY_LEN) onTelemetry(v);
   };
   ws.onclose = () => { wsOpen = false; ready = false; scheduleReconnect(); };
   ws.onerror = () => { try { ws.close(); } catch (e) {} };
@@ -448,6 +476,28 @@ trimVal.addEventListener("pointerdown", () => {
   trimResetTimer = setTimeout(() => { if (sendTrim(0, 0)) { buzz(40); toast(t("trimReset"), "info"); } }, 800);
 });
 ["pointerup", "pointercancel", "pointerleave"].forEach(ev => trimVal.addEventListener(ev, () => clearTimeout(trimResetTimer)));
+// ---- flips (experimental, hidden unless switched on in the Info dialog) ----
+const flipStore = {
+  get() { try { return localStorage.getItem("wc_flip") === "1"; } catch (e) { return false; } },
+  set(v) { try { localStorage.setItem("wc_flip", v ? "1" : "0"); } catch (e) {} },
+};
+let flipOn = flipStore.get();
+function flipAllowed() {
+  return !!(tel && wsOpen && performance.now() - lastTel < TELEMETRY_WARN_MS && (tel.state & S_ARMED) &&
+    (tel.state & S_YOU) && tel.stage === 0 && !(tel.state2 & S2_FLIP) && info && info.flip);
+}
+document.querySelectorAll("#flips button").forEach(btn => btn.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  if (!flipAllowed()) return;
+  ws.send(new Uint8Array([MSG_FLIP, Number(btn.dataset.dir), 0, 0]).buffer);
+  buzz(30);
+}));
+function onFlipReply(status) {
+  if (status === 0) { toast(t("flipGo"), "ok"); buzz([40, 60, 40]); }
+  else { toast(t("flipReasons")[status] || "?", "warn"); buzz(80); }
+}
+$("flipSet").checked = flipOn;
+$("flipSet").addEventListener("change", () => { flipOn = $("flipSet").checked; flipStore.set(flipOn); render(); });
 // ---- level on the ground: the tilt the sensor reads becomes the trim --------
 const LEVEL_MS = 2000, LEVEL_MAX_SPREAD = 0.5, LEVEL_MAX_DEG = 5;
 let levelSamples = null, levelUntil = 0;
@@ -547,6 +597,10 @@ function render() {
   $("stats").textContent = t("stats")({ roll: tel.roll.toFixed(0), pitch: tel.pitch.toFixed(0), thrust: Math.round(tel.thrust * 100),
     delay: tel.delay, stale: tel.stale, rate: tel.rxRate });
 
+  $("mid").classList.toggle("flipon", flipOn);
+  const canFlip = flipAllowed();
+  document.querySelectorAll("#flips button").forEach(b => { b.disabled = !canFlip; });
+  $("flipNote").textContent = info && !info.flip ? t("flipOff") : t("flipWarn");
   const label = armBtn.querySelector("span");
   armBtn.classList.toggle("armed", armReq);
   if (armReq) { label.textContent = t("disarm"); armBtn.disabled = false; }
@@ -563,6 +617,7 @@ function render() {
   let text = "", cls = "info";
   if (!live) { text = wsOpen ? t("msgPoorLink") : t("msgNoLink"); cls = "bad"; }
   else if (flying && tel.stage >= 1) { text = t("stages")[tel.stage]; cls = tel.stage >= 2 ? "bad" : "warn"; }
+  else if (flying && (s2 & S2_FLIP)) { text = t("msgFlip"); cls = "ok"; }
   else if (batLand) { text = t("msgBatLand"); cls = "bad"; }
   else if (s & S_TUMBLED) { text = t("msgTumbled"); cls = "bad"; }
   else if (flying && (s & S_LOWBAT)) { text = t("msgBatLow"); cls = "warn"; }

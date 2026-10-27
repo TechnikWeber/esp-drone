@@ -838,6 +838,187 @@ static void testMotorTest(void)
     CHECK(rback.mask == 0x08 && rback.percent == 15 && rback.status == WC_MOTOR_BUSY && rback.durationMs == 2500);
 }
 
+static const wcFlipConfig_t flipCfg = {
+    .rateDps = 800, .boostMs = 250, .boostPct = 170, .spinPct = 50,
+    .exitDeg = 70, .recoverMs = 350, .recoverPct = 140, .timeoutMs = 900,
+};
+
+/* Euler roll and pitch of a drone turned by angleDeg about one axis (as the
+ * estimator reports them: pitch stays within +-90, roll jumps to 180). */
+static void flipAttitude(uint8_t dir, float angleDeg, float *roll, float *pitch)
+{
+    float a = fmodf(angleDeg, 360.0f);
+    if (dir == WC_FLIP_LEFT || dir == WC_FLIP_RIGHT) {
+        a = dir == WC_FLIP_RIGHT ? a : -a;
+        *roll = a > 180.0f ? a - 360.0f : (a < -180.0f ? a + 360.0f : a);
+        *pitch = 0.0f;
+        return;
+    }
+    const float phi = dir == WC_FLIP_BACK ? a : -a;     /* + = nose up */
+    if (fabsf(phi) <= 90.0f || fabsf(phi) >= 270.0f) {
+        *roll = 0.0f;
+        *pitch = fabsf(phi) <= 90.0f ? phi : (phi > 0 ? phi - 360.0f : phi + 360.0f);
+    } else {
+        *roll = 180.0f;
+        *pitch = phi > 0 ? 180.0f - phi : -180.0f - phi;
+    }
+}
+
+/* Runs a flip with the drone turning at the commanded rate; returns the
+ * duration of SPIN in ms (or -1 if it never left SPIN) and the angle turned. */
+static int runFlip(uint8_t dir, const wcFlipConfig_t *c, float hover, bool turns, float *turned)
+{
+    wcFlip_t f;
+    wcFlipOut_t out;
+    uint32_t t = 5000;
+    float angle = 0.0f;
+    int spinStart = -1, spinEnd = -1;
+    wcFlipStart(&f, dir, t, hover);
+    for (int i = 0; i < 400; i++, t += 10) {
+        float roll, pitch;
+        flipAttitude(dir, angle, &roll, &pitch);
+        if (!wcFlipUpdate(&f, c, t, roll, pitch, &out)) {
+            break;
+        }
+        if (out.spin && spinStart < 0) {
+            spinStart = (int)t;
+        }
+        if (!out.spin && spinStart >= 0 && spinEnd < 0) {
+            spinEnd = (int)t;
+        }
+        if (out.spin && turns) {
+            const float rate = fabsf(out.rollRateDps) + fabsf(out.pitchRateDps);
+            angle += rate * 0.01f;
+        }
+    }
+    *turned = angle;
+    return spinStart >= 0 && spinEnd >= 0 ? spinEnd - spinStart : -1;
+}
+
+static void testFlip(void)
+{
+    puts("flip");
+    uint8_t buf[8], dir = 0xFF, status = 0xFF;
+    for (uint8_t d = 0; d <= WC_FLIP_RIGHT; d++) {
+        CHECK(wcEncodeFlip(d, buf, sizeof(buf)) == WC_FLIP_LEN);
+        CHECK(wcDecodeFlip(buf, WC_FLIP_LEN, &dir) && dir == d);
+    }
+    buf[1] = WC_FLIP_RIGHT + 1;
+    CHECK(!wcDecodeFlip(buf, WC_FLIP_LEN, &dir));
+    CHECK(!wcDecodeFlip(buf, WC_FLIP_LEN + 1, &dir));
+    CHECK(wcEncodeFlip(0, buf, 3) == 0);
+    CHECK(wcEncodeFlipReply(WC_FLIP_LEFT, WC_FLIP_BUSY, buf, sizeof(buf)) == WC_FLIP_REPLY_LEN);
+    CHECK(wcDecodeFlipReply(buf, WC_FLIP_REPLY_LEN, &dir, &status) && dir == WC_FLIP_LEFT && status == WC_FLIP_BUSY);
+    CHECK(!wcDecodeFlipReply(buf, WC_FLIP_REPLY_LEN - 1, &dir, &status));
+
+    // start conditions, in this order
+    wcFlipInputs_t in = {.enabled = true, .pilot = true, .hoverKnown = true, .thrustUp = true, .busy = false};
+    CHECK(wcFlipCheck(&in) == WC_FLIP_OK);
+    in.thrustUp = false;
+    CHECK(wcFlipCheck(&in) == WC_FLIP_NOT_FLYING);
+    in.thrustUp = true;
+    in.hoverKnown = false;
+    CHECK(wcFlipCheck(&in) == WC_FLIP_NOT_FLYING);
+    in.busy = true;
+    CHECK(wcFlipCheck(&in) == WC_FLIP_BUSY);
+    in.pilot = false;
+    CHECK(wcFlipCheck(&in) == WC_FLIP_NOT_PILOT);
+    in.enabled = false;
+    CHECK(wcFlipCheck(&in) == WC_FLIP_DISABLED);
+
+    // phases of a right flip: boost, spin at +rate, recover, done
+    wcFlip_t f;
+    wcFlipOut_t out;
+    wcFlipStart(&f, WC_FLIP_RIGHT, 1000, 0.5f);
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1000, 0, 0, &out) && !out.spin);
+    CHECK_NEAR(out.thrust, 0.85f, 1e-4f);                     // 170 % of hover
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1249, 0, 0, &out) && !out.spin && f.phase == WC_FLIP_BOOST);
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1250, 0, 0, &out) && out.spin && f.phase == WC_FLIP_SPIN);
+    CHECK(out.rollRateDps == 800.0f && out.pitchRateDps == 0.0f);
+    CHECK_NEAR(out.thrust, 0.25f, 1e-4f);                     // 50 % of hover
+    // upright again but never upside down: keeps turning
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1300, 10, 0, &out) && out.spin);
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1400, 170, 0, &out) && out.spin && f.inverted);
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1450, -100, 0, &out) && out.spin);
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1460, -71, 0, &out) && out.spin);      // 71 deg from upright
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1470, -65, 0, &out) && !out.spin);     // within 70: recover
+    CHECK(f.phase == WC_FLIP_RECOVER && !f.timedOut);
+    CHECK_NEAR(out.thrust, 0.7f, 1e-4f);                      // 140 % of hover
+    CHECK(wcFlipUpdate(&f, &flipCfg, 1819, 0, 0, &out) && !out.spin);
+    CHECK(!wcFlipUpdate(&f, &flipCfg, 1820, 0, 0, &out) && f.phase == WC_FLIP_IDLE);
+    CHECK(!wcFlipUpdate(&f, &flipCfg, 1830, 0, 0, &out));
+
+    // directions and signs
+    const struct { uint8_t dir; float roll, pitch; } signs[] = {
+        {WC_FLIP_FORWARD, 0, -800}, {WC_FLIP_BACK, 0, 800}, {WC_FLIP_LEFT, -800, 0}, {WC_FLIP_RIGHT, 800, 0},
+    };
+    for (size_t i = 0; i < 4; i++) {
+        wcFlipStart(&f, signs[i].dir, 0, 0.5f);
+        CHECK(wcFlipUpdate(&f, &flipCfg, 300, 0, 0, &out) && out.spin);
+        CHECK(out.rollRateDps == signs[i].roll && out.pitchRateDps == signs[i].pitch);
+    }
+
+    // a full turn in every direction, including the Euler jump of pitch flips:
+    // the spin ends 70 deg before upright, so after 290 deg
+    for (uint8_t d = 0; d <= WC_FLIP_RIGHT; d++) {
+        float turned = 0.0f;
+        const int spinMs = runFlip(d, &flipCfg, 0.5f, true, &turned);
+        CHECK(spinMs > 0 && spinMs < (int)flipCfg.timeoutMs);
+        CHECK(turned > 285.0f && turned < 305.0f);
+    }
+
+    // a drone that does not turn: the timeout ends the spin
+    float turned = 1.0f;
+    const int spinMs = runFlip(WC_FLIP_LEFT, &flipCfg, 0.5f, false, &turned);
+    CHECK(spinMs == (int)flipCfg.timeoutMs && turned == 0.0f);
+
+    // thrust limits: at least WC_FLIP_MIN_THRUST while turning, at most 1
+    wcFlipConfig_t c = flipCfg;
+    c.spinPct = 10;
+    c.boostPct = 250;
+    c.boostMs = 0;
+    wcFlipStart(&f, WC_FLIP_BACK, 0, 0.5f);
+    CHECK(wcFlipUpdate(&f, &c, 0, 0, 0, &out) && out.spin);   // no boost: spin at once
+    CHECK_NEAR(out.thrust, WC_FLIP_MIN_THRUST, 1e-6f);
+    c.boostMs = 100;
+    wcFlipStart(&f, WC_FLIP_BACK, 0, 0.5f);
+    CHECK(wcFlipUpdate(&f, &c, 0, 0, 0, &out) && out.thrust == 1.0f);
+
+    // changeable parameters
+    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+        CHECK(strcmp(wcTunables[i].name, wcGainNames[i]) == 0);
+    }
+    for (int i = 0; i < WC_TUNABLE_COUNT; i++) {
+        CHECK(wcParamNameValid(wcTunables[i].name));
+        CHECK(wcTunableIndex(wcTunables[i].name) == i);
+        CHECK(wcTunableValid(i, wcTunables[i].min) && wcTunableValid(i, wcTunables[i].max));
+        CHECK(!wcTunableValid(i, wcTunables[i].max + 1.0f) && !wcTunableValid(i, NAN));
+    }
+    CHECK(wcTunableIndex("flip.rate") == WC_GAIN_COUNT);
+    CHECK(wcTunableIndex("flip.timeoutMs") == WC_TUNABLE_COUNT - 1);
+    CHECK(wcTunableIndex("motorPowerSet.m1") == -1);
+    CHECK(!wcTunableValid(-1, 1.0f) && !wcTunableValid(WC_TUNABLE_COUNT, 1.0f));
+    // the defaults above are valid
+    const uint16_t *v = &flipCfg.rateDps;
+    for (int i = 0; i < WC_FLIP_PARAM_COUNT; i++) {
+        CHECK(wcTunableValid(WC_GAIN_COUNT + i, (float)v[i]));
+    }
+
+    float vals[WC_FLIP_PARAM_COUNT], back[WC_FLIP_PARAM_COUNT];
+    bool valid[WC_FLIP_PARAM_COUNT];
+    for (int i = 0; i < WC_FLIP_PARAM_COUNT; i++) {
+        vals[i] = (float)v[i];
+    }
+    vals[3] = 500.0f;                                          // spin: out of range
+    uint8_t blob[WC_FLIP_BLOB_LEN];
+    CHECK(wcEncodeFlipBlob(vals, blob, sizeof(blob)) == WC_FLIP_BLOB_LEN);
+    CHECK(wcDecodeFlipBlob(blob, sizeof(blob), back, valid));
+    CHECK(valid[0] && back[0] == 800.0f && !valid[3] && valid[7]);
+    CHECK(!wcDecodeFlipBlob(blob, sizeof(blob) - 1, back, valid));
+    blob[1] = WC_FLIP_PARAM_COUNT + 1;
+    CHECK(!wcDecodeFlipBlob(blob, sizeof(blob), back, valid));
+}
+
 int main(void)
 {
     testControlRoundTrip();
@@ -858,6 +1039,7 @@ int main(void)
     testGains();
     testStreamAndFast();
     testMotorTest();
+    testFlip();
 
     printf("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -80,6 +80,7 @@ static const char *TAG = "WEBCTRL";
 #define WEBCTRL_NVS_NAMESPACE "webctrl"
 #define WEBCTRL_NVS_TRIM      "trim"
 #define WEBCTRL_NVS_GAINS     "gains"
+#define WEBCTRL_NVS_FLIP      "flip"
 #define WEBCTRL_TRIM_SAVE_MS  1000   /* save this long after the last change */
 
 extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
@@ -160,10 +161,39 @@ static bool fastWanted;              /* at least one client asked for FAST */
 
 /* Controller gains for the ground station. Defaults are the values the
  * firmware starts with; gains stored in NVS replace them at boot. */
-static paramVarId_t gainIds[WC_GAIN_COUNT];
-static float gainDefaults[WC_GAIN_COUNT];
-static bool gainsReady;              /* ids resolved, defaults read, stored gains applied */
-static bool gainsStored;             /* gains from NVS are in use */
+static paramVarId_t tunIds[WC_TUNABLE_COUNT];  /* wcTunables: gains, then flip parameters */
+static float tunDefaults[WC_TUNABLE_COUNT];
+static bool gainsReady;              /* ids resolved, defaults read, stored values applied */
+static bool gainsStored;             /* values from NVS are in use */
+
+/* Flips (experimental): flown by the drone itself, see webctrl_core.h. The
+ * parameters are firmware parameters (group "flip"), so the ground station
+ * can tune and store them. */
+#ifdef CONFIG_WEBCTRL_FLIP
+#define WEBCTRL_FLIP_ENABLED true
+#else
+#define WEBCTRL_FLIP_ENABLED false
+#define CONFIG_WEBCTRL_FLIP_RATE_DPS 800
+#define CONFIG_WEBCTRL_FLIP_BOOST_MS 250
+#define CONFIG_WEBCTRL_FLIP_BOOST_PERCENT 170
+#define CONFIG_WEBCTRL_FLIP_SPIN_PERCENT 50
+#define CONFIG_WEBCTRL_FLIP_EXIT_DEG 70
+#define CONFIG_WEBCTRL_FLIP_RECOVER_MS 350
+#define CONFIG_WEBCTRL_FLIP_RECOVER_PERCENT 140
+#define CONFIG_WEBCTRL_FLIP_TIMEOUT_MS 900
+#endif
+
+static wcFlipConfig_t flipCfg = {
+    .rateDps = CONFIG_WEBCTRL_FLIP_RATE_DPS,
+    .boostMs = CONFIG_WEBCTRL_FLIP_BOOST_MS,
+    .boostPct = CONFIG_WEBCTRL_FLIP_BOOST_PERCENT,
+    .spinPct = CONFIG_WEBCTRL_FLIP_SPIN_PERCENT,
+    .exitDeg = CONFIG_WEBCTRL_FLIP_EXIT_DEG,
+    .recoverMs = CONFIG_WEBCTRL_FLIP_RECOVER_MS,
+    .recoverPct = CONFIG_WEBCTRL_FLIP_RECOVER_PERCENT,
+    .timeoutMs = CONFIG_WEBCTRL_FLIP_TIMEOUT_MS,
+};
+static wcFlip_t flip;
 
 /* Motor test: the motors get fixed ratios (parameter group motorPowerSet,
  * used by the power distribution while armed) for a limited time. */
@@ -250,6 +280,38 @@ static void sendSetpoint(const wcSetpoint_t *sp)
     commanderSetSetpoint(&s, COMMANDER_PRIORITY_WEB);
 }
 
+/*
+ * Setpoint while a flip flies itself. Turning: both tilt axes on rate control
+ * (the Euler angles of the attitude controller jump by 180 deg in a pitch
+ * flip), and yaw holds the current estimate for the same reason. Otherwise:
+ * level (trim), no yaw rate.
+ */
+static void sendFlipSetpoint(const wcFlipOut_t *f)
+{
+    setpoint_t s;
+    memset(&s, 0, sizeof(s));
+    s.mode.x = modeDisable;
+    s.mode.y = modeDisable;
+    s.mode.z = modeDisable;
+    if (f->spin) {
+        s.mode.roll = modeVelocity;
+        s.mode.pitch = modeVelocity;
+        s.attitudeRate.roll = f->rollRateDps;     // + = right side down
+        s.attitudeRate.pitch = f->pitchRateDps;   // + = nose up, as the rate controller sees it
+        s.mode.yaw = modeAbs;
+        s.attitude.yaw = logFloatOrZero(logYaw);
+    } else {
+        s.mode.roll = modeAbs;
+        s.mode.pitch = modeAbs;
+        s.mode.yaw = modeVelocity;
+        s.attitude.roll = trim.roll / 10.0f;
+        s.attitude.pitch = -(trim.pitch / 10.0f);  // legacy convention, see sendSetpoint()
+    }
+    const float thrust = f->thrust * WEB_MAX_THRUST;
+    s.thrust = (thrust < WEB_MIN_THRUST) ? 0 : thrust;
+    commanderSetSetpoint(&s, COMMANDER_PRIORITY_WEB);
+}
+
 static void startPilotSession(int idx, const wcControl_t *cmd, uint32_t t)
 {
     pilotToken = esp_random() | 1u;
@@ -273,6 +335,7 @@ static void endPilotSession(bool failsafe, wcStopReason_t reason, const char *wh
     pilotToken = 0;
     pilotIdx = -1;
     pilotStage = WC_STAGE_OFF;
+    flip.phase = WC_FLIP_IDLE;
     lastStopReason = (uint8_t)reason;
     memset(&lastOut, 0, sizeof(lastOut));
 
@@ -286,6 +349,25 @@ static void endPilotSession(bool failsafe, wcStopReason_t reason, const char *wh
 static bool systemReady(void)
 {
     return systemIsStarted() && sensorsAreCalibrated();
+}
+
+/* A flip request of a client (lock held) */
+static wcFlipStatus_t handleFlip(int idx, uint8_t dir, uint32_t t)
+{
+    const wcFlipInputs_t in = {
+        .enabled = WEBCTRL_FLIP_ENABLED,
+        .pilot = pilotToken != 0 && idx == pilotIdx,
+        .hoverKnown = wcHoverValid(&hover),
+        .thrustUp = lastOut.thrust >= 0.7f * hover.value,
+        .busy = flip.phase != WC_FLIP_IDLE || pilotStage != WC_STAGE_OK || batState.landing || motorTest.active,
+    };
+    const wcFlipStatus_t st = wcFlipCheck(&in);
+    if (st == WC_FLIP_OK) {
+        static const char *const names[] = {"forward", "back", "left", "right"};
+        wcFlipStart(&flip, dir, t, hover.value);
+        ESP_LOGW(TAG, "flip %s (hover %.2f)", names[dir], (double)hover.value);
+    }
+    return st;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -483,39 +565,61 @@ static bool mayStoreGains(void)
     return pilotToken == 0 && systemGetArmOwner() == ARM_SOURCE_NONE && !motorTest.active;
 }
 
-/* Once the controller is set up: read the defaults, apply stored gains. */
+/* Gains are floats, the flip parameters integers. */
+static void setTunable(int i, float v)
+{
+    if (i < WC_GAIN_COUNT) {
+        paramSetFloat(tunIds[i], v);
+    } else {
+        paramSetInt(tunIds[i], (int)lrintf(v));
+    }
+}
+
+/* Reads a stored blob; false if there is none or it does not fit. */
+static bool loadBlob(nvs_handle_t h, const char *key, uint8_t *blob, size_t cap, size_t *len)
+{
+    *len = cap;
+    return nvs_get_blob(h, key, blob, len) == ESP_OK;
+}
+
+/* Once the controller is set up: read the defaults, apply stored values. */
 static void gainsInit(void)
 {
-    paramVarId_t ids[WC_GAIN_COUNT];
-    float defaults[WC_GAIN_COUNT];
-    for (int i = 0; i < WC_GAIN_COUNT; i++) {
-        ids[i] = paramByName(wcGainNames[i]);
+    paramVarId_t ids[WC_TUNABLE_COUNT];
+    float defaults[WC_TUNABLE_COUNT];
+    for (int i = 0; i < WC_TUNABLE_COUNT; i++) {
+        ids[i] = paramByName(wcTunables[i].name);
         if (!PARAM_VARID_IS_VALID(ids[i])) {
-            ESP_LOGE(TAG, "gain %s not found: gains read only", wcGainNames[i]);
+            ESP_LOGE(TAG, "parameter %s not found: gains read only", wcTunables[i].name);
             return;
         }
         defaults[i] = paramGetFloat(ids[i]);
     }
 
-    float stored[WC_GAIN_COUNT];
-    bool valid[WC_GAIN_COUNT] = {false};
-    bool haveStored = false;
+    float stored[WC_TUNABLE_COUNT];
+    bool valid[WC_TUNABLE_COUNT] = {false};
     nvs_handle_t h;
     if (nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
         uint8_t blob[WC_GAINS_BLOB_LEN];
-        size_t len = sizeof(blob);
-        haveStored = nvs_get_blob(h, WEBCTRL_NVS_GAINS, blob, &len) == ESP_OK &&
-                     wcDecodeGainsBlob(blob, len, stored, valid);
+        size_t len;
+        if (!loadBlob(h, WEBCTRL_NVS_GAINS, blob, sizeof(blob), &len) ||
+            !wcDecodeGainsBlob(blob, len, stored, valid)) {
+            memset(valid, 0, WC_GAIN_COUNT * sizeof(valid[0]));
+        }
+        if (!loadBlob(h, WEBCTRL_NVS_FLIP, blob, sizeof(blob), &len) ||
+            !wcDecodeFlipBlob(blob, len, &stored[WC_GAIN_COUNT], &valid[WC_GAIN_COUNT])) {
+            memset(&valid[WC_GAIN_COUNT], 0, WC_FLIP_PARAM_COUNT * sizeof(valid[0]));
+        }
         nvs_close(h);
     }
 
     int applied = 0;
     xSemaphoreTake(lock, portMAX_DELAY);
-    memcpy(gainIds, ids, sizeof(gainIds));
-    memcpy(gainDefaults, defaults, sizeof(gainDefaults));
-    for (int i = 0; haveStored && i < WC_GAIN_COUNT; i++) {
+    memcpy(tunIds, ids, sizeof(tunIds));
+    memcpy(tunDefaults, defaults, sizeof(tunDefaults));
+    for (int i = 0; i < WC_TUNABLE_COUNT; i++) {
         if (valid[i]) {
-            paramSetFloat(gainIds[i], stored[i]);
+            setTunable(i, stored[i]);
             applied++;
         }
     }
@@ -523,26 +627,34 @@ static void gainsInit(void)
     gainsReady = true;
     xSemaphoreGive(lock);
     if (applied > 0) {
-        ESP_LOGI(TAG, "%d controller gains loaded from flash", applied);
+        ESP_LOGI(TAG, "%d stored controller parameters loaded from flash", applied);
     }
 }
 
-static esp_err_t gainsWriteFlash(const float *values, bool erase)
+/* Writes one blob, or erases its key. */
+static esp_err_t writeBlob(nvs_handle_t h, const char *key, const uint8_t *blob, size_t len, bool erase)
+{
+    if (!erase) {
+        return nvs_set_blob(h, key, blob, len);
+    }
+    const esp_err_t err = nvs_erase_key(h, key);
+    return err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err;
+}
+
+static esp_err_t gainsWriteFlash(const float *values, bool eraseGains, bool eraseFlip)
 {
     nvs_handle_t h;
     esp_err_t err = nvs_open(WEBCTRL_NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         return err;
     }
-    if (erase) {
-        err = nvs_erase_key(h, WEBCTRL_NVS_GAINS);
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            err = ESP_OK;
-        }
-    } else {
-        uint8_t blob[WC_GAINS_BLOB_LEN];
-        wcEncodeGainsBlob(values, blob, sizeof(blob));
-        err = nvs_set_blob(h, WEBCTRL_NVS_GAINS, blob, sizeof(blob));
+    uint8_t gains[WC_GAINS_BLOB_LEN];
+    uint8_t flips[WC_FLIP_BLOB_LEN];
+    wcEncodeGainsBlob(values, gains, sizeof(gains));
+    wcEncodeFlipBlob(&values[WC_GAIN_COUNT], flips, sizeof(flips));
+    err = writeBlob(h, WEBCTRL_NVS_GAINS, gains, sizeof(gains), eraseGains);
+    if (err == ESP_OK) {
+        err = writeBlob(h, WEBCTRL_NVS_FLIP, flips, sizeof(flips), eraseFlip);
     }
     if (err == ESP_OK) {
         err = nvs_commit(h);
@@ -551,39 +663,45 @@ static esp_err_t gainsWriteFlash(const float *values, bool erase)
     return err;
 }
 
-/* SAVE stores the current gains (or erases the stored ones if all are the
+/* SAVE stores the current values (erases a group whose values are all the
  * defaults); RESET restores the defaults and erases the stored ones. */
 static wcParamStatus_t gainsStore(bool reset)
 {
-    float values[WC_GAIN_COUNT];
-    bool allDefault = true;
+    float values[WC_TUNABLE_COUNT];
+    bool gainsDefault = true, flipDefault = true;
 
     xSemaphoreTake(lock, portMAX_DELAY);
     if (!gainsReady || !mayStoreGains()) {
         xSemaphoreGive(lock);
         return WC_PARAM_BUSY;
     }
-    for (int i = 0; i < WC_GAIN_COUNT; i++) {
+    for (int i = 0; i < WC_TUNABLE_COUNT; i++) {
         if (reset) {
-            paramSetFloat(gainIds[i], gainDefaults[i]);
+            setTunable(i, tunDefaults[i]);
         }
-        values[i] = paramGetFloat(gainIds[i]);
-        allDefault = allDefault && values[i] == gainDefaults[i];
+        values[i] = paramGetFloat(tunIds[i]);
+        const bool isDefault = values[i] == tunDefaults[i];
+        if (i < WC_GAIN_COUNT) {
+            gainsDefault = gainsDefault && isDefault;
+        } else {
+            flipDefault = flipDefault && isDefault;
+        }
     }
     xSemaphoreGive(lock);
 
-    const esp_err_t err = gainsWriteFlash(values, allDefault);
+    const esp_err_t err = gainsWriteFlash(values, gainsDefault, flipDefault);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "storing the gains failed: %s", esp_err_to_name(err));
         return WC_PARAM_FAILED;
     }
     xSemaphoreTake(lock, portMAX_DELAY);
-    gainsStored = !allDefault;
+    gainsStored = !gainsDefault || !flipDefault;
     xSemaphoreGive(lock);
     if (reset) {
-        ESP_LOGI(TAG, "gains reset to the defaults");
+        ESP_LOGI(TAG, "gains and flip parameters reset to the defaults");
     } else {
-        ESP_LOGI(TAG, "gains stored (%s)", allDefault ? "all defaults" : "custom");
+        ESP_LOGI(TAG, "stored: gains %s, flip %s", gainsDefault ? "default" : "custom",
+                 flipDefault ? "default" : "custom");
     }
     return WC_PARAM_OK;
 }
@@ -598,36 +716,42 @@ static void handleParam(int fd, int idx, const wcParamReq_t *req)
     } else {
         strlcpy(rep.name, req->name, sizeof(rep.name));
         const paramVarId_t id = paramByName(req->name);
-        const int gain = wcGainIndex(req->name);
+        const int tun = wcTunableIndex(req->name);
         xSemaphoreTake(lock, portMAX_DELAY);
         if (!PARAM_VARID_IS_VALID(id)) {
             rep.status = WC_PARAM_UNKNOWN;
         } else {
             if (req->op == WC_PARAM_WRITE) {
-                if (gain < 0) {
+                if (tun < 0) {
                     rep.status = WC_PARAM_DENIED;
-                } else if (!gainsReady || !mayChangeGains(idx)) {
+                } else if (!gainsReady || !mayChangeGains(idx) ||
+                           (tun >= WC_GAIN_COUNT && flip.phase != WC_FLIP_IDLE)) {
                     rep.status = WC_PARAM_BUSY;
-                } else if (!wcGainValueValid(req->value)) {
+                } else if (!wcTunableValid(tun, req->value)) {
                     rep.status = WC_PARAM_INVALID;
                 } else {
-                    paramSetFloat(id, req->value);
+                    setTunable(tun, req->value);
                     ESP_LOGI(TAG, "%s = %.4g", req->name, (double)req->value);
                 }
             }
             rep.value = paramGetFloat(id);
-            if (gain >= 0 && gainsReady) {
-                rep.dflt = gainDefaults[gain];
+            if (tun >= 0 && gainsReady) {
+                rep.dflt = tunDefaults[tun];
                 rep.flags |= WC_PARAMF_WRITABLE;
             }
         }
+        if (gainsStored) {
+            rep.flags |= WC_PARAMF_STORED;
+        }
         xSemaphoreGive(lock);
     }
-    xSemaphoreTake(lock, portMAX_DELAY);
-    if (gainsStored) {
-        rep.flags |= WC_PARAMF_STORED;
+    if (req->op == WC_PARAM_SAVE || req->op == WC_PARAM_RESET) {
+        xSemaphoreTake(lock, portMAX_DELAY);
+        if (gainsStored) {
+            rep.flags |= WC_PARAMF_STORED;
+        }
+        xSemaphoreGive(lock);
     }
-    xSemaphoreGive(lock);
 
     uint8_t buf[WC_PARAM_MAX_LEN];
     sendBinary(fd, buf, wcEncodeParamReply(&rep, buf, sizeof(buf)));
@@ -646,7 +770,7 @@ static void sendInfo(int fd, bool resumed)
                      "\"maxAngle\":%d,\"maxYawRate\":%d,\"telemetryHz\":%d,"
                      "\"failsafe\":{\"ok\":%d,\"hold\":%d,\"descend\":%d,\"off\":%d,\"stale\":%d},"
                      "\"battery\":{\"land\":%d,\"arm\":%d,\"landTime\":%d},\"trimMax\":%d,"
-                     "\"fastHz\":%d,\"motorTest\":{\"maxPercent\":%d,\"maxMs\":%d}}",
+                     "\"fastHz\":%d,\"motorTest\":{\"maxPercent\":%d,\"maxMs\":%d},\"flip\":%s}",
                      WC_PROTOCOL_VERSION, app->version, platformConfigGetDeviceTypeName(),
                      resumed ? "true" : "false",
                      CONFIG_WEBCTRL_MAX_ANGLE_DEG, CONFIG_WEBCTRL_MAX_YAW_RATE_DEG,
@@ -656,7 +780,8 @@ static void sendInfo(int fd, bool resumed)
                      CONFIG_WEBCTRL_BAT_LAND_MV, CONFIG_WEBCTRL_BAT_ARM_MIN_MV,
                      CONFIG_WEBCTRL_BAT_LAND_TIME_MS, WC_TRIM_MAX,
                      1000 / WC_FAST_PERIOD_MS,
-                     motorTestAvailable ? CONFIG_WEBCTRL_MOTOR_TEST_MAX_PERCENT : 0, WC_MOTOR_TEST_MAX_MS);
+                     motorTestAvailable ? CONFIG_WEBCTRL_MOTOR_TEST_MAX_PERCENT : 0, WC_MOTOR_TEST_MAX_MS,
+                     WEBCTRL_FLIP_ENABLED ? "true" : "false");
     if (n <= 0 || n >= (int)sizeof(json)) {
         return;
     }
@@ -685,6 +810,8 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
     wcParamReq_t param;
     bool motorReplyFrame = false;
     wcMotorReply_t motorReply;
+    bool flipReplyFrame = false;
+    uint8_t flipDir = 0, flipStatus = 0;
 
     xSemaphoreTake(lock, portMAX_DELAY);
     int idx = findClient(fd);
@@ -736,6 +863,11 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
                 motorReply = handleMotorTest(idx, &req, t);
                 motorReplyFrame = true;
             }
+        } else if (buf[0] == WC_MSG_FLIP) {
+            if (wcDecodeFlip(buf, len, &flipDir)) {
+                flipStatus = (uint8_t)handleFlip(idx, flipDir, t);
+                flipReplyFrame = true;
+            }
         }
     }
     xSemaphoreGive(lock);
@@ -749,6 +881,10 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
     if (motorReplyFrame) {
         uint8_t out[WC_MOTOR_REPLY_LEN];
         sendBinary(fd, out, wcEncodeMotorReply(&motorReply, out, sizeof(out)));
+    }
+    if (flipReplyFrame) {
+        uint8_t out[WC_FLIP_REPLY_LEN];
+        sendBinary(fd, out, wcEncodeFlipReply(flipDir, flipStatus, out, sizeof(out)));
     }
 }
 
@@ -1015,7 +1151,8 @@ static void buildTelemetry(uint32_t now)
     // "Too low to arm" only on the ground: under load the voltage sags anyway.
     const uint8_t state2 = (uint8_t)((session && batState.landing ? WC_STATE2_BAT_LANDING : 0) |
                                      (!session && wcBatteryArmBlocked(&batState, &cfg) ? WC_STATE2_BAT_NO_ARM : 0) |
-                                     (motorTest.active ? WC_STATE2_MOTOR_TEST : 0));
+                                     (motorTest.active ? WC_STATE2_MOTOR_TEST : 0) |
+                                     (flip.phase != WC_FLIP_IDLE ? WC_STATE2_FLIP : 0));
     const int16_t roll = wcCentiDeg(logFloatOrZero(logRoll));
     const int16_t pitch = wcCentiDeg(logFloatOrZero(logPitch));
     const int16_t yaw = wcCentiDeg(logFloatOrZero(logYaw));
@@ -1107,8 +1244,20 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
             const wcStage_t stage = wcStageForAge(&cfg, wcLinkAge(&pilotLink, &cfg, now));
             wcSetpoint_t last;
             wcControlToSetpoint(&cfg, &pilotLink.last, &trim, &last);
-            if (stage == WC_STAGE_OK && !batState.landing) {
+            const bool flipping = flip.phase != WC_FLIP_IDLE;
+            if (stage == WC_STAGE_OK && !batState.landing && !flipping) {
                 wcHoverUpdate(&hover, last.thrust, dt);
+            }
+            // A running flip flies itself, whatever the link does in the
+            // meantime; afterwards the pilot (or the failsafe) takes over.
+            wcFlipOut_t flipOut;
+            const bool flipActive = flipping &&
+                                    wcFlipUpdate(&flip, &flipCfg, now, logFloatOrZero(logRoll),
+                                                 logFloatOrZero(logPitch), &flipOut);
+            if (flipping && !flipActive && flip.timedOut) {
+                ESP_LOGW(TAG, "flip: rotation timed out, levelled out");
+            } else if (flipping && !flipActive) {
+                ESP_LOGI(TAG, "flip done");
             }
             wcFailsafeOutput(&cfg, stage, &last, &hover, &trim, &out);
             out.thrust = fminf(out.thrust, wcBatteryThrustCap(&batState, &cfg, now));
@@ -1125,6 +1274,13 @@ static void supervise(uint32_t now, float dt, uint32_t *rateWindowStart)
 
             if (stage == WC_STAGE_OFF) {
                 endPilotSession(true, WC_STOP_LINK, "link lost, failsafe ended");
+            } else if (flipActive) {
+                flipOut.thrust = fminf(flipOut.thrust, wcBatteryThrustCap(&batState, &cfg, now));
+                lastOut.roll = trim.roll / 10.0f;
+                lastOut.pitch = trim.pitch / 10.0f;
+                lastOut.yawRate = 0.0f;
+                lastOut.thrust = flipOut.thrust;
+                sendFlipSetpoint(&flipOut);
             } else if (batState.landing && (out.thrust <= 0.0f || last.thrust <= 0.0f)) {
                 // The ramp ran out, or the pilot pulled the throttle down after touchdown.
                 endPilotSession(true, WC_STOP_BATTERY, "battery empty, landed");
@@ -1379,6 +1535,17 @@ void webctrlLaunch(void)
                             WEBCTRL_TASK_PRI, NULL, NETWORK_TASK_CORE);
 }
 
+PARAM_GROUP_START(flip)
+PARAM_ADD(PARAM_UINT16, rate, &flipCfg.rateDps)
+PARAM_ADD(PARAM_UINT16, boostMs, &flipCfg.boostMs)
+PARAM_ADD(PARAM_UINT16, boost, &flipCfg.boostPct)
+PARAM_ADD(PARAM_UINT16, spin, &flipCfg.spinPct)
+PARAM_ADD(PARAM_UINT16, exitDeg, &flipCfg.exitDeg)
+PARAM_ADD(PARAM_UINT16, recoverMs, &flipCfg.recoverMs)
+PARAM_ADD(PARAM_UINT16, recover, &flipCfg.recoverPct)
+PARAM_ADD(PARAM_UINT16, timeoutMs, &flipCfg.timeoutMs)
+PARAM_GROUP_STOP(flip)
+
 LOG_GROUP_START(webctrl)
 LOG_ADD(LOG_UINT8, stage, &pilotStage)
 LOG_ADD(LOG_UINT16, staleDrops, &pilotLink.staleDrops)
@@ -1387,4 +1554,5 @@ LOG_ADD(LOG_FLOAT, hover, &hover.value)
 LOG_ADD(LOG_UINT32, txSkipped, &telemetrySkipped)
 LOG_ADD(LOG_FLOAT, vbat, &batState.volts)
 LOG_ADD(LOG_UINT8, batLanding, &batState.landing)
+LOG_ADD(LOG_UINT8, flipPhase, &flip.phase)
 LOG_GROUP_STOP(webctrl)

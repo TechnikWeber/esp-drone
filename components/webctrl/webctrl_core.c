@@ -604,6 +604,202 @@ uint16_t wcMotorRatio(uint8_t percent)
 }
 
 /* ------------------------------------------------------------------------ */
+/* Flips                                                                     */
+/* ------------------------------------------------------------------------ */
+
+/* FLIP layout: 0 type  1 direction  2 reserved (2)
+ * FLIP_REPLY layout: 0 type  1 direction  2 status  3 reserved */
+bool wcDecodeFlip(const uint8_t *buf, size_t len, uint8_t *dir)
+{
+    if (buf == NULL || dir == NULL || len != WC_FLIP_LEN || buf[0] != WC_MSG_FLIP || buf[1] > WC_FLIP_RIGHT) {
+        return false;
+    }
+    *dir = buf[1];
+    return true;
+}
+
+size_t wcEncodeFlip(uint8_t dir, uint8_t *buf, size_t cap)
+{
+    if (buf == NULL || cap < WC_FLIP_LEN) {
+        return 0;
+    }
+    buf[0] = WC_MSG_FLIP;
+    buf[1] = dir;
+    buf[2] = 0;
+    buf[3] = 0;
+    return WC_FLIP_LEN;
+}
+
+size_t wcEncodeFlipReply(uint8_t dir, uint8_t status, uint8_t *buf, size_t cap)
+{
+    if (buf == NULL || cap < WC_FLIP_REPLY_LEN) {
+        return 0;
+    }
+    buf[0] = WC_MSG_FLIP_REPLY;
+    buf[1] = dir;
+    buf[2] = status;
+    buf[3] = 0;
+    return WC_FLIP_REPLY_LEN;
+}
+
+bool wcDecodeFlipReply(const uint8_t *buf, size_t len, uint8_t *dir, uint8_t *status)
+{
+    if (buf == NULL || dir == NULL || status == NULL || len != WC_FLIP_REPLY_LEN || buf[0] != WC_MSG_FLIP_REPLY) {
+        return false;
+    }
+    *dir = buf[1];
+    *status = buf[2];
+    return true;
+}
+
+wcFlipStatus_t wcFlipCheck(const wcFlipInputs_t *in)
+{
+    if (!in->enabled) {
+        return WC_FLIP_DISABLED;
+    }
+    if (!in->pilot) {
+        return WC_FLIP_NOT_PILOT;
+    }
+    if (in->busy) {
+        return WC_FLIP_BUSY;
+    }
+    if (!in->hoverKnown || !in->thrustUp) {
+        return WC_FLIP_NOT_FLYING;
+    }
+    return WC_FLIP_OK;
+}
+
+void wcFlipStart(wcFlip_t *f, uint8_t dir, uint32_t nowMs, float hover)
+{
+    memset(f, 0, sizeof(*f));
+    f->phase = WC_FLIP_BOOST;
+    f->dir = dir;
+    f->phaseMs = nowMs;
+    f->hover = hover;
+}
+
+static float hoverShare(float hover, uint16_t percent)
+{
+    const float v = hover * (float)percent / 100.0f;
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+bool wcFlipUpdate(wcFlip_t *f, const wcFlipConfig_t *cfg, uint32_t nowMs, float rollDeg, float pitchDeg,
+                  wcFlipOut_t *out)
+{
+    const float rad = 3.14159265f / 180.0f;
+    memset(out, 0, sizeof(*out));
+
+    if (f->phase == WC_FLIP_BOOST) {
+        if (nowMs - f->phaseMs < cfg->boostMs) {
+            out->thrust = hoverShare(f->hover, cfg->boostPct);
+            return true;
+        }
+        f->phase = WC_FLIP_SPIN;
+        f->phaseMs = nowMs;
+    }
+
+    if (f->phase == WC_FLIP_SPIN) {
+        const float up = cosf(rollDeg * rad) * cosf(pitchDeg * rad);   /* 1 upright, -1 upside down */
+        if (up < -0.5f) {
+            f->inverted = true;
+        }
+        const bool done = f->inverted && up > cosf((float)cfg->exitDeg * rad);
+        f->timedOut = !done && nowMs - f->phaseMs >= cfg->timeoutMs;
+        if (!done && !f->timedOut) {
+            const float rate = (float)cfg->rateDps;
+            out->spin = true;
+            switch (f->dir) {
+            case WC_FLIP_FORWARD: out->pitchRateDps = -rate; break;
+            case WC_FLIP_BACK:    out->pitchRateDps = rate;  break;
+            case WC_FLIP_LEFT:    out->rollRateDps = -rate;  break;
+            default:              out->rollRateDps = rate;   break;
+            }
+            const float thrust = hoverShare(f->hover, cfg->spinPct);
+            out->thrust = thrust < WC_FLIP_MIN_THRUST ? WC_FLIP_MIN_THRUST : thrust;
+            return true;
+        }
+        f->phase = WC_FLIP_RECOVER;
+        f->phaseMs = nowMs;
+    }
+
+    if (f->phase == WC_FLIP_RECOVER) {
+        if (nowMs - f->phaseMs < cfg->recoverMs) {
+            out->thrust = hoverShare(f->hover, cfg->recoverPct);
+            return true;
+        }
+        f->phase = WC_FLIP_IDLE;
+    }
+    return false;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Changeable parameters                                                     */
+/* ------------------------------------------------------------------------ */
+
+const wcTunable_t wcTunables[WC_TUNABLE_COUNT] = {
+    {"pid_rate.roll_kp", 0, WC_GAIN_MAX}, {"pid_rate.roll_ki", 0, WC_GAIN_MAX}, {"pid_rate.roll_kd", 0, WC_GAIN_MAX},
+    {"pid_rate.pitch_kp", 0, WC_GAIN_MAX}, {"pid_rate.pitch_ki", 0, WC_GAIN_MAX}, {"pid_rate.pitch_kd", 0, WC_GAIN_MAX},
+    {"pid_rate.yaw_kp", 0, WC_GAIN_MAX}, {"pid_rate.yaw_ki", 0, WC_GAIN_MAX}, {"pid_rate.yaw_kd", 0, WC_GAIN_MAX},
+    {"pid_attitude.roll_kp", 0, WC_GAIN_MAX}, {"pid_attitude.roll_ki", 0, WC_GAIN_MAX},
+    {"pid_attitude.roll_kd", 0, WC_GAIN_MAX}, {"pid_attitude.pitch_kp", 0, WC_GAIN_MAX},
+    {"pid_attitude.pitch_ki", 0, WC_GAIN_MAX}, {"pid_attitude.pitch_kd", 0, WC_GAIN_MAX},
+    {"pid_attitude.yaw_kp", 0, WC_GAIN_MAX}, {"pid_attitude.yaw_ki", 0, WC_GAIN_MAX},
+    {"pid_attitude.yaw_kd", 0, WC_GAIN_MAX},
+    /* the same ranges as in Kconfig.projbuild */
+    {"flip.rate", 360, 2000}, {"flip.boostMs", 0, 600}, {"flip.boost", 100, 250}, {"flip.spin", 10, 150},
+    {"flip.exitDeg", 10, 120}, {"flip.recoverMs", 0, 1000}, {"flip.recover", 50, 250},
+    {"flip.timeoutMs", 300, 1500},
+};
+
+int wcTunableIndex(const char *name)
+{
+    if (name == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < WC_TUNABLE_COUNT; i++) {
+        if (strcmp(name, wcTunables[i].name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool wcTunableValid(int index, float v)
+{
+    return index >= 0 && index < WC_TUNABLE_COUNT && isfinite(v) &&
+           v >= wcTunables[index].min && v <= wcTunables[index].max;
+}
+
+size_t wcEncodeFlipBlob(const float *values, uint8_t *buf, size_t cap)
+{
+    if (values == NULL || buf == NULL || cap < WC_FLIP_BLOB_LEN) {
+        return 0;
+    }
+    buf[0] = WC_FLIP_BLOB_VERSION;
+    buf[1] = WC_FLIP_PARAM_COUNT;
+    buf[2] = 0;
+    buf[3] = 0;
+    for (int i = 0; i < WC_FLIP_PARAM_COUNT; i++) {
+        wrf(&buf[4 + 4 * i], values[i]);
+    }
+    return WC_FLIP_BLOB_LEN;
+}
+
+bool wcDecodeFlipBlob(const uint8_t *buf, size_t len, float *values, bool *valid)
+{
+    if (buf == NULL || values == NULL || valid == NULL || len != WC_FLIP_BLOB_LEN ||
+        buf[0] != WC_FLIP_BLOB_VERSION || buf[1] != WC_FLIP_PARAM_COUNT) {
+        return false;
+    }
+    for (int i = 0; i < WC_FLIP_PARAM_COUNT; i++) {
+        values[i] = rdf(&buf[4 + 4 * i]);
+        valid[i] = wcTunableValid(WC_GAIN_COUNT + i, values[i]);
+    }
+    return true;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Link supervision                                                          */
 /* ------------------------------------------------------------------------ */
 

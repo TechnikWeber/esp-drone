@@ -38,8 +38,9 @@
  * 2: TRIM message; telemetry 40 bytes with state2, stop reason and trim
  * 3: PARAM, STREAM and MOTOR_TEST for the ground station, FAST samples
  *    (all optional: a version 2 page works unchanged)
+ * 4: FLIP (experimental), flip parameters writable with PARAM
  */
-#define WC_PROTOCOL_VERSION   3
+#define WC_PROTOCOL_VERSION   4
 
 #define WC_MSG_CONTROL        0x01  /* client -> drone */
 #define WC_MSG_HELLO          0x02  /* client -> drone, first frame after connect */
@@ -47,10 +48,12 @@
 #define WC_MSG_PARAM          0x04  /* client -> drone: read, write, save or reset a gain */
 #define WC_MSG_STREAM         0x05  /* client -> drone: FAST samples on or off */
 #define WC_MSG_MOTOR_TEST     0x06  /* client -> drone: spin motors on the bench */
+#define WC_MSG_FLIP           0x07  /* client -> drone: flip in flight (experimental) */
 #define WC_MSG_TELEMETRY      0x81  /* drone -> client */
 #define WC_MSG_FAST           0x82  /* drone -> client that asked for it, 20 frames/s */
 #define WC_MSG_PARAM_REPLY    0x84  /* drone -> client, answer to PARAM */
 #define WC_MSG_MOTOR_REPLY    0x86  /* drone -> client, answer to MOTOR_TEST */
+#define WC_MSG_FLIP_REPLY     0x87  /* drone -> client, answer to FLIP */
 
 #define WC_CONTROL_LEN        16
 #define WC_HELLO_LEN          8
@@ -59,6 +62,8 @@
 #define WC_STREAM_LEN         4
 #define WC_MOTOR_TEST_LEN     8
 #define WC_MOTOR_REPLY_LEN    8
+#define WC_FLIP_LEN           4
+#define WC_FLIP_REPLY_LEN     4
 
 /* CONTROL flags */
 #define WC_FLAG_ARM           0x01  /* pilot wants the motors armed (level, not edge) */
@@ -108,6 +113,7 @@ typedef struct {
 #define WC_STATE2_BAT_LANDING 0x01  /* battery empty in flight: forced landing */
 #define WC_STATE2_BAT_NO_ARM  0x02  /* battery too low to arm (only sent while nobody flies) */
 #define WC_STATE2_MOTOR_TEST  0x04  /* a motor test is running */
+#define WC_STATE2_FLIP        0x08  /* a flip is running */
 
 /* Why the last web pilot session ended */
 typedef enum {
@@ -321,6 +327,119 @@ wcMotorStatus_t wcMotorTestCheck(const wcMotorTestInputs_t *in, const wcMotorTes
                                  uint8_t maxPercent, wcMotorTest_t *applied);
 /* Motor ratio (0..65535) for a power in percent */
 uint16_t wcMotorRatio(uint8_t percent);
+
+/* ------------------------------------------------------------------------ */
+/* Flips (experimental, protocol 4)                                          */
+/* ------------------------------------------------------------------------ */
+/*
+ * The pilot asks for a flip, the drone flies it by itself, so a stalled link
+ * cannot cut it in half: climb with more thrust (BOOST), turn about the roll
+ * or pitch axis at a fixed rate with little thrust (SPIN), and once it has
+ * been upside down and is back within exitDeg of upright, level out with
+ * extra thrust to catch the fall (RECOVER). Then the pilot's sticks count
+ * again. Without an altitude sensor this is open loop: it needs height.
+ *
+ * During SPIN both tilt axes are rate controlled (the other one at 0 deg/s),
+ * because Euler angles jump by 180 deg when a pitch flip passes the vertical.
+ * Whether the drone is upright is judged from cos(roll) * cos(pitch), the
+ * vertical part of its up axis, which does not jump.
+ */
+typedef enum {
+    WC_FLIP_FORWARD = 0,  /* nose down first */
+    WC_FLIP_BACK,
+    WC_FLIP_LEFT,
+    WC_FLIP_RIGHT,
+} wcFlipDir_t;
+
+typedef enum {
+    WC_FLIP_OK = 0,       /* flip started */
+    WC_FLIP_DISABLED,     /* switched off in the firmware configuration */
+    WC_FLIP_NOT_PILOT,    /* only the web pilot can flip */
+    WC_FLIP_NOT_FLYING,   /* hover thrust not learned yet, or throttle too low */
+    WC_FLIP_BUSY,         /* flip running, failsafe, forced landing */
+} wcFlipStatus_t;
+
+typedef enum {
+    WC_FLIP_IDLE = 0,
+    WC_FLIP_BOOST,
+    WC_FLIP_SPIN,
+    WC_FLIP_RECOVER,
+} wcFlipPhase_t;
+
+/* Firmware parameters (group "flip"), so the ground station can tune them */
+typedef struct {
+    uint16_t rateDps;     /* rotation rate */
+    uint16_t boostMs;     /* climb before the rotation */
+    uint16_t boostPct;    /* thrust while climbing, % of the hover thrust */
+    uint16_t spinPct;     /* thrust while rotating, % of the hover thrust */
+    uint16_t exitDeg;     /* levelling takes over this far before upright */
+    uint16_t recoverMs;   /* catching after the rotation */
+    uint16_t recoverPct;  /* thrust while catching, % of the hover thrust */
+    uint16_t timeoutMs;   /* longest rotation, then the drone levels out anyway */
+} wcFlipConfig_t;
+
+#define WC_FLIP_MIN_THRUST    0.1f  /* the controller needs some thrust to turn */
+
+typedef struct {
+    bool enabled;         /* compiled in */
+    bool pilot;           /* the request comes from the web pilot */
+    bool hoverKnown;      /* hover thrust learned */
+    bool thrustUp;        /* the pilot's thrust is near the hover thrust */
+    bool busy;            /* flip running, failsafe stage, forced landing, motor test */
+} wcFlipInputs_t;
+
+typedef struct {
+    uint8_t  phase;       /* wcFlipPhase_t */
+    uint8_t  dir;         /* wcFlipDir_t */
+    bool     inverted;    /* has been upside down */
+    bool     timedOut;    /* SPIN ended by the timeout */
+    uint32_t phaseMs;     /* start of the current phase */
+    float    hover;       /* hover thrust at the start */
+} wcFlip_t;
+
+typedef struct {
+    bool  spin;           /* SPIN: both tilt axes rate controlled, yaw follows */
+    float rollRateDps;    /* + = right side down */
+    float pitchRateDps;   /* + = nose up */
+    float thrust;         /* 0..1; outside SPIN the attitude is level (trim) */
+} wcFlipOut_t;
+
+bool wcDecodeFlip(const uint8_t *buf, size_t len, uint8_t *dir);
+size_t wcEncodeFlip(uint8_t dir, uint8_t *buf, size_t cap);
+size_t wcEncodeFlipReply(uint8_t dir, uint8_t status, uint8_t *buf, size_t cap);
+bool wcDecodeFlipReply(const uint8_t *buf, size_t len, uint8_t *dir, uint8_t *status);
+wcFlipStatus_t wcFlipCheck(const wcFlipInputs_t *in);
+void wcFlipStart(wcFlip_t *f, uint8_t dir, uint32_t nowMs, float hover);
+/* One control cycle with the current attitude. False once the flip is over
+ * (or was not running); out is valid only while it returns true. */
+bool wcFlipUpdate(wcFlip_t *f, const wcFlipConfig_t *cfg, uint32_t nowMs, float rollDeg, float pitchDeg,
+                  wcFlipOut_t *out);
+
+/* ------------------------------------------------------------------------ */
+/* Parameters the network may change: the gains and the flip parameters      */
+/* ------------------------------------------------------------------------ */
+
+#define WC_FLIP_PARAM_COUNT   8
+#define WC_TUNABLE_COUNT      (WC_GAIN_COUNT + WC_FLIP_PARAM_COUNT)
+
+typedef struct {
+    const char *name;
+    float min;
+    float max;
+} wcTunable_t;
+
+/* The gains first (same order as wcGainNames), then the flip parameters in
+ * the order of wcFlipConfig_t. */
+extern const wcTunable_t wcTunables[WC_TUNABLE_COUNT];
+int wcTunableIndex(const char *name);   /* -1 if not changeable */
+bool wcTunableValid(int index, float v);
+
+/* Stored flip parameters (NVS blob "flip"): version, count, reserved (2),
+ * WC_FLIP_PARAM_COUNT floats */
+#define WC_FLIP_BLOB_VERSION  1
+#define WC_FLIP_BLOB_LEN      (4 + 4 * WC_FLIP_PARAM_COUNT)
+size_t wcEncodeFlipBlob(const float *values, uint8_t *buf, size_t cap);
+bool wcDecodeFlipBlob(const uint8_t *buf, size_t len, float *values, bool *valid);
 
 /* true if sequence number a is newer than b (wrap safe) */
 static inline bool wcSeqNewer(uint16_t a, uint16_t b)

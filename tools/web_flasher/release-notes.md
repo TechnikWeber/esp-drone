@@ -26,6 +26,9 @@ From the box to the first hover:
 
 ## What's in it
 
+- **Fixed in v0.4.1:** the phone page connected but never got an answer ("Poor link" and
+  "Disconnected" in turn). ESP-IDF 5.5 no longer calls the WebSocket handler after the
+  handshake, so the drone never registered the browser. Tested on an E1 Mini.
 - Browser control over the drone's Wi-Fi with a captive portal: WebSocket, only the newest
   command counts, late commands are dropped, staged failsafe (hold, level out, descend, off).
 - Battery protection: forced landing below 3.0 V, no arming below 3.4 V.

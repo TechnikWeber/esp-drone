@@ -888,31 +888,48 @@ static void handleBinary(int fd, const uint8_t *buf, size_t len, uint32_t t)
     }
 }
 
+/* Registers the connection on its first call. ESP-IDF up to 5.4 calls the
+ * handler once after the handshake (HTTP_GET); 5.5 no longer does, so the
+ * first frame registers the connection there. */
+static bool registerClient(int fd)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    const bool known = findClient(fd) >= 0;
+    xSemaphoreGive(lock);
+    if (known) {
+        return true;
+    }
+
+    uint32_t ip = 0;
+    struct sockaddr_storage addr;
+    socklen_t addrLen = sizeof(addr);
+    if (getpeername(fd, (struct sockaddr *)&addr, &addrLen) == 0 && addr.ss_family == AF_INET) {
+        ip = ((struct sockaddr_in *)&addr)->sin_addr.s_addr;
+    }
+    // Telemetry should leave at once, not wait for more data (Nagle).
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+    xSemaphoreTake(lock, portMAX_DELAY);
+    int idx = addClient(fd, ip);
+    xSemaphoreGive(lock);
+    if (idx < 0) {
+        ESP_LOGW(TAG, "too many browsers, connection refused");
+        return false;
+    }
+    ESP_LOGI(TAG, "browser connected (fd %d, slot %d)", fd, idx);
+    return true;
+}
+
 static esp_err_t wsHandler(httpd_req_t *req)
 {
     const int fd = httpd_req_to_sockfd(req);
 
+    if (!registerClient(fd)) {
+        return ESP_FAIL;
+    }
     if (req->method == HTTP_GET) {
-        // Handshake done: register the client.
-        uint32_t ip = 0;
-        struct sockaddr_storage addr;
-        socklen_t addrLen = sizeof(addr);
-        if (getpeername(fd, (struct sockaddr *)&addr, &addrLen) == 0 && addr.ss_family == AF_INET) {
-            ip = ((struct sockaddr_in *)&addr)->sin_addr.s_addr;
-        }
-        // Telemetry should leave at once, not wait for more data (Nagle).
-        int one = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-
-        xSemaphoreTake(lock, portMAX_DELAY);
-        int idx = addClient(fd, ip);
-        xSemaphoreGive(lock);
-        if (idx < 0) {
-            ESP_LOGW(TAG, "too many browsers, connection refused");
-            return ESP_FAIL;
-        }
-        ESP_LOGI(TAG, "browser connected (fd %d, slot %d)", fd, idx);
-        return ESP_OK;
+        return ESP_OK;   // handshake only, no frame to read
     }
 
     httpd_ws_frame_t frame = {0};

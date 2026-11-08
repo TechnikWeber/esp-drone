@@ -97,7 +97,10 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
     <td width="260"><img src="docs/images/shopping-cart.jpg" width="240" alt="AliExpress cart: E1 Mini drone kit and two 1000 mAh batteries, 40.79 EUR in total"></td>
     <td>
       <a href="https://www.aliexpress.com/item/1005013106847900.html"><b>Drone kit</b></a>: "ESP32 Drone"
-      E1 Mini, variant "Finished Product", shipped without battery.<br><br>
+      E1 Mini, variant "Finished Product", shipped without battery. <b>On delivery two motors
+      (front left, rear right) were wired the wrong way round</b> and spun counter-clockwise like
+      the others; swapping their two wires fixed it. Check the directions with the motor test
+      before the first flight: <a href="docs/e1-mini.md#motor-directions">docs/e1-mini.md</a>.<br><br>
       <a href="https://www.aliexpress.com/item/1005004375261361.html"><b>Batteries</b></a>: 2 × 1S LiPo
       1000 mAh, type 503450 (50 × 34 × 5 mm), PH2.0 plug, no brand and no C rating.
       <b>Tested: too weak, do not buy.</b> With throttle the voltage drops to about 3.1 V and the

@@ -67,6 +67,13 @@ From the vendor firmware's mixer: **front left and rear right spin clockwise**,
 front right and rear left counter-clockwise (seen from above). ESP-Drone's
 Crazyflie mixer expects the same, so `MOTOR_YAW_INVERT` is off.
 
+**Check this on every new kit.** The motors are brushed and switched by a
+single MOSFET each, so the direction depends only on how the motor is wired;
+the firmware cannot change it. On the first kit tested here (November 2026)
+front left and rear right were connected the wrong way round: all four motors
+spun counter-clockwise, although the two pairs have wires of different
+colours. Swapping the two wires of those motors fixed it.
+
 ## Battery
 
 The kit usually ships without a battery. The seller's parts list names a

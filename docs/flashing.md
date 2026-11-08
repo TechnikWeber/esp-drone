@@ -13,8 +13,9 @@ written at address **0x0**:
 
 Before the first flash:
 
-- **Nothing has been tested on real hardware yet.** Remove the propellers and
-  work through the bench checklist in [e1-mini.md](e1-mini.md).
+- **Tested on one E1 Mini so far** (phone control and hovering). Every kit
+  differs: remove the propellers and work through the bench checklist in
+  [e1-mini.md](e1-mini.md).
 - **Back up the factory firmware** if you want to go back:
   `esptool.py --port /dev/ttyUSB0 read_flash 0 ALL backup.bin` (details in
   [e1-mini.md](e1-mini.md#back-up-the-factory-firmware-before-the-first-flash)).

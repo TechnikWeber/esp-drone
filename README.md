@@ -112,8 +112,15 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
 All boards of the original are kept. GitHub Actions builds every change with
 ESP-IDF 5.5 and 6.1: ESP32 (E1 Mini), ESP32-S2 and -S3 (ESP32-S2-Drone), ESP32-P4
 (without web control, the P4 has no Wi-Fi of its own) and ESP32-S31 (preview).
-ESPlane (ESP32) was built locally with 5.5. **Nothing has been tested on real
-hardware yet;** the screenshots come from the simulated drone in
+ESPlane (ESP32) was built locally with 5.5.
+
+<img src="docs/images/e1-mini-first-flight.jpg" align="right" width="260" alt="E1 Mini held in one hand, ESP32 DevKit on top, LEDs on">
+
+**Tested on real hardware (8 Nov 2026):** the E1 Mini with ESP-IDF 5.5. The
+phone joins the drone's Wi-Fi, the control page opens by itself, telemetry
+comes back, the motor test passes and the drone hovers under phone control.
+Not yet tried on hardware: the desktop ground station, flips and the other
+boards. The screenshots come from the simulated drone in
 `tools/mock_drone.py` (with a simulated gamepad for the ground station). RAM on the ESP32-S2 is tight: the core dump is off there
 and the SPI interrupt handler is not in IRAM; a test has to show whether the heap
 is enough for web control.

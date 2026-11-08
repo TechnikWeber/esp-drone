@@ -4,8 +4,9 @@ From the box to the first hover in seven steps. Details for every step are in
 [e1-mini.md](e1-mini.md) (hardware, bench checklist) and
 [webcontrol.md](webcontrol.md) (the control page).
 
-> **Nothing has been tested on real hardware yet.** Keep the propellers off
-> until step 6, and stop at the first step that does not behave as described.
+> **Tested on one E1 Mini so far** (phone control and hovering). Every kit
+> differs: keep the propellers off until step 6, and stop at the first step
+> that does not behave as described.
 
 ## 1. What you need
 

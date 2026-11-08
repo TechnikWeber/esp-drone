@@ -11,8 +11,12 @@ the Arduino firmware *CF-Drone*
 rename to "XW-Drone". This guide describes how ESP-Drone was adapted to the
 hardware, how to flash it and how to test on the bench before the first flight.
 
-> **Status:** ported from the vendor's documents, **not tested on real hardware
-> yet**. The bench checklist below is therefore mandatory.
+> **Status:** ported from the vendor's documents and **tested on one kit**
+> (November 2026): phone connection, motor test and hovering under phone
+> control work. Every kit differs (see motor directions and battery below),
+> so the bench checklist is still mandatory.
+
+<img src="images/e1-mini-first-flight.jpg" width="320" alt="E1 Mini held in one hand, ESP32 DevKit on top, LEDs on">
 
 The short path from the box to the first hover:
 [getting-started.md](getting-started.md).

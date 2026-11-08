@@ -85,5 +85,5 @@ after 4 s. With an empty battery it lands by itself.
 | "Arm" stays grey | The message line says why: still calibrating (keep it still), battery empty, or another controller is flying. |
 | The drone drifts | Level on the ground (step 5), then trim in flight. |
 | It oscillates or turns sluggishly | Tune the controller gains with the [ground station](groundstation.md#tuning-the-controller), see also [First flight](e1-mini.md#first-flight). |
-| The motors stop right after take-off | The battery cannot deliver the current; use a 1S pack for RC models. |
+| The motors stop right after take-off, or the drone switches off with throttle | The battery cannot deliver the current: its voltage collapses and the ESP32 loses power. Use a 1S pack for RC models with 25C or more (see [Battery](e1-mini.md#battery)). |
 | The wrong motors react on the bench | Do not fly; check the motor pins and `IMU_ROTATION` in `menuconfig`. |

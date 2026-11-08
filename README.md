@@ -99,8 +99,9 @@ Weber, [TechnikWeber](https://github.com/TechnikWeber)):
       <a href="https://www.aliexpress.com/item/1005013106847900.html"><b>Drone kit</b></a>: "ESP32 Drone"
       E1 Mini, variant "Finished Product", shipped without battery.<br><br>
       <a href="https://www.aliexpress.com/item/1005004375261361.html"><b>Batteries</b></a>: 2 × 1S LiPo
-      1000 mAh, type 503450 (50 × 34 × 5 mm), PH2.0 plug. Recommended in a forum, not tested here
-      yet. What a battery has to meet: <a href="docs/e1-mini.md#battery">docs/e1-mini.md</a>.
+      1000 mAh, type 503450 (50 × 34 × 5 mm), PH2.0 plug, no brand and no C rating.
+      <b>Tested: too weak, do not buy.</b> With throttle the voltage drops to about 3.1 V and the
+      drone switches off. What a battery has to meet: <a href="docs/e1-mini.md#battery">docs/e1-mini.md</a>.
     </td>
   </tr>
 </table>

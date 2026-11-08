@@ -73,8 +73,14 @@ The kit usually ships without a battery. The seller's parts list names a
 "3.7V flight battery 900mAh"; packs from 800 to 1000 mAh fit as well.
 
 - **1S LiPo for RC models** (3.7 V nominal, 4.2 V full) with a high discharge
-  rate, 20C or more. The vendor warns against ordinary lithium cells: they
-  cannot deliver the motor current.
+  rate, **25C or more** (30C is better). The four motors draw about 6–8 A at
+  high throttle. The vendor warns against ordinary lithium cells: they cannot
+  deliver the motor current.
+- **Tested and too weak:** the no-name 1S LiPo 1000 mAh, type 503450
+  (50 × 34 × 5 mm, PH2.0, no C rating) from the parts list in the README. On the
+  first test (November 2026) the voltage dropped to about 3.1 V with throttle,
+  then the ESP32 lost power and the drone switched off. Buy a pack with a stated
+  C rating from an RC brand instead.
 - **At most 12 mm thick**, the height of the battery holder. The bay is open at
   both ends and about 40 × 42 mm by the product photos, so common 900 mAh packs
   (about 8–10 × 25–30 × 40–50 mm) fit. A rubber band from the kit holds the

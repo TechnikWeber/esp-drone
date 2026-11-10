@@ -125,6 +125,19 @@ boards. The screenshots come from the simulated drone in
 and the SPI interrupt handler is not in IRAM; a test has to show whether the heap
 is enough for web control.
 
+### Safety & legal
+
+A drone with spinning propellers can cut skin, hurt eyes and damage property. This
+firmware comes **"as is", without any warranty**; the author accepts **no liability**.
+
+- Keep the propellers **off** while flashing, setting up and testing the motors
+  ([docs/getting-started.md](docs/getting-started.md)).
+- Even small drones fall under drone rules in many countries (registration, insurance,
+  where and how high you may fly). **Check your local rules** before you fly.
+- Wi-Fi range is short and the link can drop. The failsafe lands the drone, but a
+  falling drone is still dangerous: keep it in sight and away from people and animals.
+- You use it **at your own risk.** See [`LICENSE`](LICENSE).
+
 License unchanged: **GPL-3.0** (see [LICENSE](LICENSE)). Copyright of the
 original parts: Espressif Systems and Bitcraze AB. Exception: the E1 Mini
 schematic and PCB in [hardware/E1_Mini](hardware/E1_Mini/) are by songge8 under

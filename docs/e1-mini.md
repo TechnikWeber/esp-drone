@@ -142,8 +142,8 @@ git clone -b v5.5.6 --depth 1 --recursive --shallow-submodules \
 . ~/esp/esp-idf-v5.5.6/export.sh
 ```
 
-On Fedora, access to the DevKit's USB serial adapter (`/dev/ttyUSB0`) needs the
-group `dialout`:
+On Linux (Fedora, Debian, Ubuntu), access to the DevKit's USB serial adapter
+(`/dev/ttyUSB0`) needs the group `dialout` (on Arch: `uucp`):
 
 ```bash
 sudo usermod -aG dialout $USER     # then log out and back in

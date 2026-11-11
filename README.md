@@ -4,7 +4,6 @@
 <p>
   <a href="https://github.com/TechnikWeber/esp-drone/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/TechnikWeber/esp-drone?include_prereleases&label=download&color=2ea44f"></a>
   <a href="https://github.com/TechnikWeber/esp-drone/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/TechnikWeber/esp-drone/total?color=blue"></a>
-  <a href="https://github.com/TechnikWeber/esp-drone/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/TechnikWeber/esp-drone?style=flat&color=yellow"></a>
   <a href="https://github.com/TechnikWeber/esp-drone/actions/workflows/build_project.yml?query=branch%3Awebcontrol"><img alt="Build" src="https://github.com/TechnikWeber/esp-drone/actions/workflows/build_project.yml/badge.svg?branch=webcontrol"></a>
   <img alt="Platform: ESP32 · ESP32-S2 · ESP32-S3" src="https://img.shields.io/badge/platform-ESP32%20%C2%B7%20S2%20%C2%B7%20S3-blue">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-green"></a>

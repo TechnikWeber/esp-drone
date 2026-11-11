@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0               # the firmware version comes from git describe
@@ -45,7 +45,7 @@ jobs:
           grep -E '^CONFIG_TARGET_[A-Z0-9_]+=y' sdkconfig     # idf.py keeps it in the project root
           cd build
           python -m esptool --chip ${{ matrix.target }} merge_bin -o "../espdrone-${{ matrix.name }}.bin" @flash_args
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: espdrone-${{ matrix.name }}
           path: espdrone-${{ matrix.name }}.bin
@@ -62,8 +62,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: espdrone-*
@@ -81,9 +81,9 @@ jobs:
           --repo "${{ github.repository }}" --prerelease
           --title "${{ github.ref_name }}: browser control (not tested on hardware yet)"
           --notes-file release-notes.md
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
